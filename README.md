@@ -28,32 +28,53 @@ Aplikasi web (PWA) untuk merapikan galeri foto dengan gesture swipe, terinspiras
 | `1`–`9` | Sortir ke album ke-n |
 | `Esc` | Tutup pratinjau |
 
-## 🚀 Menjalankan
+## 🚀 Menjalankan (versi web)
 
-Tidak ada build step — cukup sajikan folder ini dengan server statis apa pun:
+Tidak ada build step — cukup sajikan folder `webapp/` dengan server statis apa pun:
 
 ```bash
-# Python
-python3 -m http.server 8080
-
-# atau Node
-npx serve .
+cd webapp
+python3 -m http.server 8080   # atau: npx serve .
 ```
 
 Lalu buka `http://localhost:8080`.
 
 > Catatan: aplikasi harus diakses lewat server (bukan `file://`) karena memakai ES modules. Service worker/offline hanya aktif lewat HTTPS atau `localhost`.
 
+## 🤖 Versi Android (APK)
+
+Folder `android/` berisi cangkang WebView native yang membundel aplikasi web
+ini menjadi APK — dengan pemilih foto galeri native (system picker, tanpa izin
+storage apa pun) dan penyimpanan IndexedDB yang persisten.
+
+- **Unduh APK**: setiap push, GitHub Actions membangun APK debug dan
+  menerbitkannya ke branch [`apk-dist`](../../tree/apk-dist) (juga tersedia
+  sebagai artifact di tab Actions).
+- **Build sendiri** (butuh Android SDK):
+
+  ```bash
+  cd android
+  ./gradlew assembleDebug
+  # hasil: app/build/outputs/apk/debug/app-debug.apk
+  ```
+
+Saat memasang, Android akan meminta izin "install dari sumber tidak dikenal" —
+itu normal untuk APK di luar Play Store.
+
 ## 🏗️ Struktur
 
 ```
-index.html            # Markup semua layar (beranda, sortir, trash, album)
-css/app.css           # Tema gelap, layout mobile-first
-js/app.js             # Logika utama: gesture, sortir, album, trash, undo
-js/db.js              # Lapisan penyimpanan IndexedDB
-sw.js                 # Service worker (cache cangkang aplikasi)
-manifest.webmanifest  # Manifest PWA
-icons/icon.svg        # Ikon aplikasi
+webapp/                 # Aplikasi web (PWA) — sumber tunggal UI
+  index.html            #   Markup semua layar (beranda, sortir, trash, album)
+  css/app.css           #   Tema gelap, layout mobile-first
+  js/app.js             #   Logika utama: gesture, sortir, album, trash, undo
+  js/db.js              #   Lapisan penyimpanan IndexedDB
+  sw.js                 #   Service worker (cache cangkang aplikasi, hanya web)
+  manifest.webmanifest  #   Manifest PWA
+  icons/icon.svg        #   Ikon aplikasi
+android/                # Cangkang WebView Android (webapp/ dibundel sebagai assets)
+  app/src/main/java/app/swipesort/MainActivity.java
+.github/workflows/build-apk.yml  # CI: build & publikasi APK
 ```
 
 ## 🔒 Privasi

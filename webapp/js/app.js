@@ -622,7 +622,10 @@ async function init() {
   updateBadges();
   showScreen('home');
 
-  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  // Lewati service worker saat berjalan di dalam WebView Android
+  // (aset sudah lokal, origin appassets.androidx.dev dilayani dari APK)
+  const inAndroidShell = location.hostname === 'appassets.androidx.dev';
+  if ('serviceWorker' in navigator && location.protocol === 'https:' && !inAndroidShell) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 }
