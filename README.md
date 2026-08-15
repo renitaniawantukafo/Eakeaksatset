@@ -20,6 +20,13 @@ Aplikasi web (PWA) untuk merapikan galeri foto dengan gesture swipe, terinspiras
   **jeda** kapan saja dan lanjutkan dari **daftar sesi tertunda**, foto yang
   sudah dipindai **otomatis dilewati selamanya**, hasil **dikelompokkan per
   bulan** dengan tombol pindah per bulan atau pindahkan semuanya sekaligus.
+- **☑ Seleksi massal** — mode Pilih: ketuk foto satu-satu atau **seret jari**
+  melintasi grid untuk memilih banyak foto sekaligus (dengan gulir otomatis di
+  tepi), lalu pindahkan atau hapus yang terpilih.
+- **🤏 Pinch zoom grid** — cubit/rentangkan dua jari pada grid untuk mengatur
+  2–6 kolom, supaya lebih banyak foto terlihat dalam satu layar.
+- **🧹 Bersihkan otomatis** — hapus semua foto berwajah yang **belum**
+  dipindahkan ke album (yang bertanda 📁 aman), lewat dialog konfirmasi sistem.
 - **🌐 Mode web** — di browser (tanpa Android), foto diimpor manual dan tetap
   dikelompokkan per bulan dari tanggal berkas; data tersimpan di IndexedDB.
 

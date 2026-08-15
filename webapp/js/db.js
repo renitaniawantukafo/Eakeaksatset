@@ -84,6 +84,7 @@ export const db = {
   getAllDecisions: () => getAll('decisions'),
 
   putFaces: (records) => tx('faces', 'readwrite', (s) => records.forEach((r) => s.put(r))),
+  deleteFaces: (keys) => tx('faces', 'readwrite', (s) => keys.forEach((k) => s.delete(k))),
   getAllFaces: () => getAll('faces'),
   clearFaces: () => tx('faces', 'readwrite', (s) => s.clear()),
 

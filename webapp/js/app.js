@@ -33,6 +33,10 @@ const state = {
   scanDone: 0,
   scanSession: null, // sesi yang sedang berjalan
   allIds: [], // [{id, taken}] dari galeri, terbaru dulu (mode native)
+  sel: { active: false, keys: new Set(), dragging: false, dragMode: 'add' },
+  gridCols: parseInt(localStorage.getItem('gridCols') || '3', 10),
+  lastMoveAlbum: null,
+  lastDeleteWasSelection: false,
 };
 
 const urlCache = new Map();
@@ -497,6 +501,20 @@ window.addEventListener('ng-moves-done', async (e) => {
   }
   await db.deleteDecisions(moved.map(String));
   moved.forEach((id) => state.decisions.delete(String(id)));
+  // Tandai foto berwajah yang berhasil dipindahkan (dipakai fitur bersihkan)
+  if (state.lastMoveAlbum) {
+    const updated = [];
+    moved.forEach((id) => {
+      const rec = state.faces.get(String(id));
+      if (rec) {
+        rec.movedTo = state.lastMoveAlbum;
+        updated.push(rec);
+      }
+    });
+    if (updated.length) await db.putFaces(updated);
+    state.lastMoveAlbum = null;
+  }
+  if (state.sel.active) setSelectionMode(false);
   toast(failed ? `📁 ${moved.length} dipindahkan, ${failed} gagal` : `📁 ${moved.length} foto dipindahkan`);
   if ($('#screen-faces').classList.contains('active')) renderFaces();
   else renderOrganize();
@@ -509,10 +527,21 @@ window.addEventListener('ng-deletes-done', async (e) => {
     toast('Penghapusan dibatalkan');
     return;
   }
-  await db.deleteDecisions(deleted.map(String));
-  deleted.forEach((id) => state.decisions.delete(String(id)));
+  const ids = deleted.map(String);
+  await db.deleteDecisions(ids);
+  await db.deleteFaces(ids);
+  ids.forEach((id) => {
+    state.decisions.delete(id);
+    state.faces.delete(id);
+    state.sel.keys.delete(id);
+  });
   toast(`🧹 ${deleted.length} foto dihapus dari galeri`);
-  renderTrash();
+  if ($('#screen-faces').classList.contains('active')) {
+    if (state.sel.active) setSelectionMode(false);
+    else renderFaces();
+  } else {
+    renderTrash();
+  }
   updateBadges();
 });
 
@@ -563,8 +592,12 @@ function renderFaces() {
   $('#faces-stats').textContent = scanned > 0
     ? `${scanned} foto sudah dipindai (otomatis dilewati) · ${pending} belum dipindai · ${found.length} berisi orang`
     : '';
+  const unmoved = unmovedFaceKeys().length;
+  $('#btn-clean-unmoved').textContent = `🧹 Hapus yang belum di-album (${unmoved})`;
+  $('#btn-clean-unmoved').disabled = unmoved === 0;
 
   renderScanSessions();
+  updateSelBar();
   if (!state.scanning) renderFaceGroups(found);
 }
 
@@ -611,6 +644,7 @@ function renderFaceGroups(found) {
   });
   const wrap = $('#faces-groups');
   wrap.innerHTML = '';
+  applyGridCols();
   [...groups.keys()].sort().reverse().forEach((mk) => {
     const keys = groups.get(mk).sort((a, b) => takenOf(b) - takenOf(a));
     const head = document.createElement('div');
@@ -624,21 +658,199 @@ function renderFaceGroups(found) {
     const grid = document.createElement('div');
     grid.className = 'photo-grid static';
     keys.forEach((key) => {
+      const rec = state.faces.get(key);
       const cell = document.createElement('div');
-      cell.className = 'grid-item';
+      cell.className = 'grid-item selectable' + (state.sel.keys.has(key) ? ' selected' : '');
+      cell.dataset.key = key;
       const img = document.createElement('img');
       img.src = photoUrl({ key }, 300);
       img.alt = '';
       img.loading = 'lazy';
-      img.addEventListener('click', () => openLightbox(photoUrl({ key })));
+      img.draggable = false;
       const mark = document.createElement('span');
       mark.className = 'face-mark';
-      mark.textContent = `👤${state.faces.get(key).faces}`;
+      mark.textContent = `👤${rec.faces}`;
       cell.append(img, mark);
+      if (rec.movedTo) {
+        const moved = document.createElement('span');
+        moved.className = 'moved-mark';
+        moved.textContent = `📁 ${rec.movedTo}`;
+        cell.appendChild(moved);
+      }
+      if (state.sel.keys.has(key)) {
+        const chk = document.createElement('span');
+        chk.className = 'sel-check';
+        chk.textContent = '✓';
+        cell.appendChild(chk);
+      }
+      cell.addEventListener('click', () => {
+        // Saat mode seleksi, pemilihan ditangani pointerdown/seret di bindDragSelect
+        if (!state.sel.active) openLightbox(photoUrl({ key }));
+      });
       grid.appendChild(cell);
     });
     wrap.append(head, grid);
   });
+  $('#faces-body').classList.toggle('selecting', state.sel.active);
+}
+
+// ---------- Seleksi massal (ketuk satuan + seret jari) ----------
+function setSelectionMode(active) {
+  state.sel.active = active;
+  if (!active) state.sel.keys.clear();
+  $('#btn-select-mode').textContent = active ? '☑ Memilih…' : '☑ Pilih';
+  updateSelBar();
+  renderFaces();
+}
+
+function toggleSelect(key) {
+  if (state.sel.keys.has(key)) state.sel.keys.delete(key);
+  else state.sel.keys.add(key);
+  refreshCellSelection(key);
+  updateSelBar();
+}
+
+function setSelect(key, selected) {
+  const had = state.sel.keys.has(key);
+  if (selected === had) return;
+  if (selected) state.sel.keys.add(key);
+  else state.sel.keys.delete(key);
+  refreshCellSelection(key);
+  updateSelBar();
+}
+
+function refreshCellSelection(key) {
+  const cell = document.querySelector(`.grid-item[data-key="${CSS.escape(key)}"]`);
+  if (!cell) return;
+  const selected = state.sel.keys.has(key);
+  cell.classList.toggle('selected', selected);
+  let chk = cell.querySelector('.sel-check');
+  if (selected && !chk) {
+    chk = document.createElement('span');
+    chk.className = 'sel-check';
+    chk.textContent = '✓';
+    cell.appendChild(chk);
+  } else if (!selected && chk) {
+    chk.remove();
+  }
+}
+
+function updateSelBar() {
+  const n = state.sel.keys.size;
+  $('#sel-bar').classList.toggle('hidden', !state.sel.active);
+  $('#faces-footer').classList.toggle('hidden', state.sel.active || state.scanning || faceKeys().length === 0);
+  $('#sel-count').textContent = `${n} dipilih`;
+  $('#btn-sel-move').disabled = n === 0;
+  $('#btn-sel-delete').disabled = n === 0;
+}
+
+// Seret jari melintasi grid untuk memilih banyak foto sekaligus
+function bindDragSelect() {
+  const body = $('#faces-body');
+
+  body.addEventListener('pointerdown', (e) => {
+    if (!state.sel.active) return;
+    const cell = e.target.closest('.grid-item[data-key]');
+    if (!cell) return;
+    state.sel.dragging = true;
+    // Sel awal menentukan mode: mulai dari sel terpilih = mode hapus-pilih
+    state.sel.dragMode = state.sel.keys.has(cell.dataset.key) ? 'remove' : 'add';
+    setSelect(cell.dataset.key, state.sel.dragMode === 'add');
+  });
+
+  body.addEventListener('pointermove', (e) => {
+    if (!state.sel.active || !state.sel.dragging) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const cell = el && el.closest ? el.closest('.grid-item[data-key]') : null;
+    if (cell) setSelect(cell.dataset.key, state.sel.dragMode === 'add');
+    // Gulir otomatis saat jari mendekati tepi atas/bawah
+    const rect = body.getBoundingClientRect();
+    if (e.clientY < rect.top + 90) body.scrollBy(0, -14);
+    else if (e.clientY > rect.bottom - 90) body.scrollBy(0, 14);
+  });
+
+  const endDrag = () => {
+    state.sel.dragging = false;
+  };
+  body.addEventListener('pointerup', endDrag);
+  body.addEventListener('pointercancel', endDrag);
+}
+
+// ---------- Pinch zoom grid (2-6 kolom) ----------
+function applyGridCols() {
+  document.getElementById('screen-faces').style.setProperty('--grid-cols', state.gridCols);
+}
+
+function setGridCols(cols) {
+  const clamped = Math.min(6, Math.max(2, cols));
+  if (clamped === state.gridCols) return;
+  state.gridCols = clamped;
+  localStorage.setItem('gridCols', String(clamped));
+  applyGridCols();
+  toast(`🔍 ${clamped} kolom`);
+}
+
+function bindPinchZoom() {
+  const body = $('#faces-body');
+  const pointers = new Map();
+  let startDist = 0;
+  let startCols = 3;
+
+  const dist = () => {
+    const [a, b] = [...pointers.values()];
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  };
+
+  body.addEventListener('pointerdown', (e) => {
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 2) {
+      startDist = dist();
+      startCols = state.gridCols;
+      state.sel.dragging = false; // pinch membatalkan seret-seleksi
+    }
+  });
+
+  body.addEventListener('pointermove', (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 2 && startDist > 0) {
+      const ratio = dist() / startDist;
+      // Rentangkan jari (ratio > 1) = foto membesar = kolom berkurang
+      setGridCols(Math.round(startCols / ratio));
+    }
+  });
+
+  const lift = (e) => {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) startDist = 0;
+  };
+  body.addEventListener('pointerup', lift);
+  body.addEventListener('pointercancel', lift);
+}
+
+// ---------- Hapus otomatis yang belum dipindahkan ke album ----------
+const unmovedFaceKeys = () => faceKeys().filter((k) => !state.faces.get(k).movedTo);
+
+function cleanUnmoved() {
+  const keys = unmovedFaceKeys();
+  if (!keys.length) {
+    toast('Semua foto berwajah sudah dipindahkan ke album 🎉');
+    return;
+  }
+  const ok = confirm(
+    `Hapus ${keys.length} foto berwajah yang BELUM dipindahkan ke album?\n\n` +
+    `Foto yang sudah dipindahkan (bertanda 📁) aman. Android akan minta konfirmasi sekali lagi.`
+  );
+  if (!ok) return;
+  deleteKeys(keys, false);
+}
+
+function deleteKeys(keys, fromSelection) {
+  if (state.committing || !keys.length) return;
+  state.committing = true;
+  state.lastDeleteWasSelection = fromSelection;
+  toast(`🗑 Menghapus ${keys.length} foto…`);
+  native.commitDeletes(JSON.stringify(keys));
 }
 
 // Sheet "pindai berapa foto?" — batasi jumlah sesuai pilihan pengguna
@@ -803,6 +1015,7 @@ async function openAlbumPicker(keys, label) {
 function moveKeysTo(keys, albumName) {
   if (state.committing || !keys.length) return;
   state.committing = true;
+  state.lastMoveAlbum = albumName;
   toast(`📁 Memindahkan ${keys.length} foto ke “${albumName}”…`);
   native.commitMoves(JSON.stringify(keys.map((id) => ({ id, album: albumName }))));
 }
@@ -1101,6 +1314,18 @@ function bindEvents() {
   $('#btn-rescan').addEventListener('click', openScanSheet);
   $('#btn-pause-scan').addEventListener('click', () => native && native.cancelScan());
   $('#btn-move-all-faces').addEventListener('click', () => openAlbumPicker(faceKeys(), 'semua'));
+  $('#btn-clean-unmoved').addEventListener('click', cleanUnmoved);
+  $('#btn-select-mode').addEventListener('click', () => setSelectionMode(!state.sel.active));
+  $('#btn-sel-cancel').addEventListener('click', () => setSelectionMode(false));
+  $('#btn-sel-move').addEventListener('click', () =>
+    openAlbumPicker([...state.sel.keys], `${state.sel.keys.size} dipilih`));
+  $('#btn-sel-delete').addEventListener('click', () => {
+    const keys = [...state.sel.keys];
+    if (!keys.length) return;
+    if (confirm(`Hapus ${keys.length} foto terpilih dari galeri?`)) deleteKeys(keys, true);
+  });
+  bindDragSelect();
+  bindPinchZoom();
   $('#album-picker').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) $('#album-picker').classList.add('hidden');
   });

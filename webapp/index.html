@@ -163,13 +163,26 @@
         <h3 class="faces-sub">⏸ Sesi tertunda</h3>
         <div id="faces-sessions" class="faces-sessions"></div>
       </div>
-      <div id="faces-stats" class="faces-stats"></div>
+      <div class="faces-toolbar">
+        <div id="faces-stats" class="faces-stats"></div>
+        <button id="btn-select-mode" class="btn btn-secondary btn-sm">☑ Pilih</button>
+      </div>
       <div id="faces-groups"></div>
       <p id="faces-empty-msg" class="muted center hidden">Tidak ditemukan foto dengan wajah orang.</p>
     </div>
 
+    <!-- Bar aksi saat mode seleksi -->
+    <div id="sel-bar" class="sel-bar hidden">
+      <button id="btn-sel-cancel" class="sb-icon" title="Batal">✕</button>
+      <span id="sel-count" class="sel-count">0 dipilih</span>
+      <button id="btn-sel-move" class="btn btn-primary btn-sm">📁 Pindahkan</button>
+      <button id="btn-sel-delete" class="btn btn-danger btn-sm">🗑 Hapus</button>
+    </div>
+
     <div id="faces-footer" class="faces-footer hidden">
       <button id="btn-move-all-faces" class="btn btn-primary btn-lg">📁 Pindahkan Semua ke Album…</button>
+      <button id="btn-clean-unmoved" class="btn btn-danger btn-lg">🧹 Hapus yang belum di-album</button>
+      <p class="smart-meta center-note">Pinch dua jari pada grid untuk memperbesar/memperkecil foto</p>
     </div>
   </section>
 
