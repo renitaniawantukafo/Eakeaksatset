@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#101014" />
+  <title>SwipeSort — Rapikan Galeri Fotomu</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+  <!-- ============ Layar Impor / Beranda ============ -->
+  <section id="screen-home" class="screen active">
+    <div class="home-hero">
+      <div class="home-logo">🗂️</div>
+      <h1>SwipeSort</h1>
+      <p class="tagline">Rapikan galeri fotomu dengan sekali usap.<br/>
+        Geser ke atas untuk buang, ketuk album untuk menyortir.</p>
+
+      <button id="btn-import" class="btn btn-primary btn-lg">📥 Impor Foto</button>
+      <input type="file" id="file-input" accept="image/*" multiple hidden />
+
+      <div id="home-stats" class="home-stats hidden">
+        <button id="btn-resume" class="btn btn-secondary btn-lg">▶️ Lanjut Menyortir</button>
+        <div class="stat-row">
+          <div class="stat"><span id="stat-total">0</span><label>Foto</label></div>
+          <div class="stat"><span id="stat-sorted">0</span><label>Tersortir</label></div>
+          <div class="stat"><span id="stat-trash">0</span><label>Di Trash</label></div>
+        </div>
+      </div>
+
+      <div class="drop-hint">…atau tarik &amp; letakkan foto ke sini</div>
+    </div>
+  </section>
+
+  <!-- ============ Layar Sortir (utama) ============ -->
+  <section id="screen-sort" class="screen">
+    <header class="sort-header">
+      <button id="btn-back-home" class="icon-btn" title="Beranda">🏠</button>
+      <div class="progress-wrap">
+        <div class="progress-text"><span id="progress-current">0</span> / <span id="progress-total">0</span></div>
+        <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+      </div>
+      <button id="btn-undo" class="icon-btn" title="Urungkan (Z)" disabled>↩️</button>
+    </header>
+
+    <div id="album-tabs" class="album-tabs">
+      <!-- tab album dirender oleh JS; tombol + selalu di akhir -->
+    </div>
+
+    <main id="card-stage" class="card-stage">
+      <div id="swipe-hint-up" class="swipe-hint hint-up">🗑️ Buang</div>
+      <div id="card-stack" class="card-stack"></div>
+      <div id="empty-state" class="empty-state hidden">
+        <div class="empty-icon">🎉</div>
+        <h2>Semua beres!</h2>
+        <p>Tidak ada foto lagi yang perlu disortir.</p>
+        <button id="btn-empty-import" class="btn btn-primary">Impor Foto Lagi</button>
+      </div>
+    </main>
+
+    <footer class="sort-footer">
+      <button id="btn-prev" class="icon-btn big" title="Sebelumnya (←)">⬅️</button>
+      <button id="btn-trash" class="icon-btn big danger" title="Buang (↑ / Del)">🗑️</button>
+      <button id="btn-keep" class="icon-btn big success" title="Simpan &amp; lanjut (Spasi)">✅</button>
+      <button id="btn-next" class="icon-btn big" title="Berikutnya (→)">➡️</button>
+    </footer>
+  </section>
+
+  <!-- ============ Layar Trash ============ -->
+  <section id="screen-trash" class="screen">
+    <header class="list-header">
+      <button class="icon-btn btn-back" title="Kembali">←</button>
+      <h2>🗑️ Trash <span id="trash-count" class="count-badge">0</span></h2>
+      <button id="btn-empty-trash" class="btn btn-danger btn-sm">Kosongkan</button>
+    </header>
+    <div id="trash-grid" class="photo-grid"></div>
+    <p id="trash-empty-msg" class="muted center hidden">Trash kosong. Bersih! ✨</p>
+  </section>
+
+  <!-- ============ Layar Album ============ -->
+  <section id="screen-albums" class="screen">
+    <header class="list-header">
+      <button class="icon-btn btn-back" title="Kembali">←</button>
+      <h2>📚 Album</h2>
+      <button id="btn-new-album" class="btn btn-secondary btn-sm">+ Baru</button>
+    </header>
+    <div id="album-list" class="album-list"></div>
+  </section>
+
+  <!-- ============ Layar Isi Album ============ -->
+  <section id="screen-album-detail" class="screen">
+    <header class="list-header">
+      <button class="icon-btn btn-back" title="Kembali">←</button>
+      <h2 id="album-detail-name">Album</h2>
+      <button id="btn-delete-album" class="btn btn-danger btn-sm">Hapus Album</button>
+    </header>
+    <div id="album-detail-grid" class="photo-grid"></div>
+    <p id="album-empty-msg" class="muted center hidden">Album ini masih kosong.</p>
+  </section>
+
+  <!-- ============ Navigasi bawah ============ -->
+  <nav class="bottom-nav">
+    <button data-nav="sort" class="nav-btn active">🃏<span>Sortir</span></button>
+    <button data-nav="albums" class="nav-btn">📚<span>Album</span></button>
+    <button data-nav="trash" class="nav-btn">🗑️<span>Trash</span><em id="nav-trash-badge" class="badge hidden">0</em></button>
+  </nav>
+
+  <!-- ============ Lightbox pratinjau ============ -->
+  <div id="lightbox" class="lightbox hidden">
+    <img id="lightbox-img" alt="Pratinjau foto" />
+    <button id="lightbox-close" class="icon-btn lightbox-close">✕</button>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

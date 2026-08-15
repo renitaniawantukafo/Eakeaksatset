@@ -1,0 +1,405 @@
+/* ====== SwipeSort — tema gelap, mobile-first ====== */
+:root {
+  --bg: #101014;
+  --bg-elev: #1a1a21;
+  --bg-card: #23232c;
+  --text: #f2f2f5;
+  --text-dim: #9a9aa5;
+  --accent: #4f8cff;
+  --accent-2: #7c5cff;
+  --danger: #ff5f6d;
+  --success: #35c98a;
+  --radius: 16px;
+  --nav-h: 62px;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  overscroll-behavior: none;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  touch-action: manipulation;
+}
+
+.hidden { display: none !important; }
+.muted { color: var(--text-dim); }
+.center { text-align: center; padding: 24px; }
+
+/* ====== Layar ====== */
+.screen {
+  display: none;
+  position: fixed;
+  inset: 0;
+  bottom: var(--nav-h);
+  flex-direction: column;
+  overflow: hidden;
+}
+.screen.active { display: flex; }
+#screen-home.active { bottom: 0; }
+
+/* ====== Beranda ====== */
+.home-hero {
+  margin: auto;
+  text-align: center;
+  padding: 32px 24px;
+  max-width: 420px;
+  width: 100%;
+}
+.home-logo { font-size: 64px; margin-bottom: 12px; }
+.home-hero h1 {
+  font-size: 34px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  margin-bottom: 8px;
+}
+.tagline { color: var(--text-dim); line-height: 1.5; margin-bottom: 28px; }
+.drop-hint { margin-top: 28px; color: var(--text-dim); font-size: 13px; }
+body.dragover .drop-hint { color: var(--accent); }
+
+.home-stats { margin-top: 20px; }
+.stat-row { display: flex; justify-content: center; gap: 28px; margin-top: 20px; }
+.stat span { font-size: 24px; font-weight: 700; display: block; }
+.stat label { font-size: 12px; color: var(--text-dim); }
+
+/* ====== Tombol ====== */
+.btn {
+  border: none;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 10px 18px;
+  cursor: pointer;
+  color: #fff;
+  background: var(--bg-card);
+  transition: transform 0.12s ease, opacity 0.12s ease;
+}
+.btn:active { transform: scale(0.96); }
+.btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+.btn-secondary { background: var(--bg-card); border: 1px solid #34343f; }
+.btn-danger { background: var(--danger); }
+.btn-lg { padding: 14px 28px; font-size: 17px; width: 100%; margin-top: 10px; }
+.btn-sm { padding: 7px 14px; font-size: 13px; }
+
+.icon-btn {
+  border: none;
+  background: var(--bg-card);
+  color: var(--text);
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  font-size: 18px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.12s ease, opacity 0.12s ease;
+  flex-shrink: 0;
+}
+.icon-btn:active { transform: scale(0.9); }
+.icon-btn:disabled { opacity: 0.35; cursor: default; }
+.icon-btn.big { width: 56px; height: 56px; font-size: 24px; }
+.icon-btn.danger { background: rgba(255, 95, 109, 0.18); }
+.icon-btn.success { background: rgba(53, 201, 138, 0.18); }
+
+/* ====== Header sortir ====== */
+.sort-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px 8px;
+}
+.progress-wrap { flex: 1; }
+.progress-text { font-size: 13px; color: var(--text-dim); text-align: center; margin-bottom: 4px; }
+.progress-bar { height: 4px; background: var(--bg-card); border-radius: 2px; overflow: hidden; }
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width 0.25s ease;
+}
+
+/* ====== Tab album ====== */
+.album-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 8px 16px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex-shrink: 0;
+}
+.album-tabs::-webkit-scrollbar { display: none; }
+.album-tab {
+  border: 1px solid #34343f;
+  background: var(--bg-elev);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease;
+}
+.album-tab:active { transform: scale(0.94); }
+.album-tab.flash { border-color: var(--accent); background: rgba(79, 140, 255, 0.2); }
+.album-tab.add { border-style: dashed; color: var(--text-dim); }
+
+/* ====== Panggung kartu ====== */
+.card-stage {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 20px;
+  min-height: 0;
+}
+.card-stack {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  max-width: 480px;
+}
+.photo-card {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-card);
+  box-shadow: var(--shadow);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  will-change: transform;
+}
+.photo-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  background: #000;
+}
+.photo-card.under {
+  transform: scale(0.94) translateY(14px);
+  opacity: 0.6;
+  pointer-events: none;
+}
+.photo-card.animating { transition: transform 0.28s ease, opacity 0.28s ease; }
+.photo-card .card-label {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  padding: 20px 14px 10px;
+  font-size: 12px;
+  color: #fff;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.75));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.swipe-hint {
+  position: absolute;
+  z-index: 5;
+  font-size: 20px;
+  font-weight: 800;
+  padding: 8px 18px;
+  border-radius: 12px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+}
+.hint-up {
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--danger);
+  border: 3px solid var(--danger);
+  background: rgba(16, 16, 20, 0.7);
+}
+
+.empty-state { text-align: center; }
+.empty-icon { font-size: 56px; margin-bottom: 10px; }
+.empty-state h2 { margin-bottom: 6px; }
+.empty-state p { color: var(--text-dim); margin-bottom: 18px; }
+
+/* ====== Footer sortir ====== */
+.sort-footer {
+  display: flex;
+  justify-content: center;
+  gap: 22px;
+  padding: 10px 16px 16px;
+}
+
+/* ====== Header daftar (trash/album) ====== */
+.list-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+}
+.list-header h2 { flex: 1; font-size: 19px; }
+.count-badge {
+  font-size: 12px;
+  background: var(--bg-card);
+  border-radius: 999px;
+  padding: 2px 9px;
+  vertical-align: middle;
+  color: var(--text-dim);
+}
+
+/* ====== Grid foto ====== */
+.photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(105px, 1fr));
+  gap: 4px;
+  padding: 4px 16px 24px;
+  overflow-y: auto;
+}
+.grid-item {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-card);
+}
+.grid-item img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: pointer; }
+.grid-item .grid-action {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  border: none;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* ====== Daftar album ====== */
+.album-list { padding: 4px 16px 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.album-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--bg-elev);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+.album-row:active { transform: scale(0.98); }
+.album-cover {
+  width: 54px;
+  height: 54px;
+  border-radius: 12px;
+  background: var(--bg-card);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  flex-shrink: 0;
+}
+.album-cover img { width: 100%; height: 100%; object-fit: cover; }
+.album-info { flex: 1; min-width: 0; }
+.album-info .name { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.album-info .meta { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+
+/* ====== Navigasi bawah ====== */
+.bottom-nav {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  height: var(--nav-h);
+  background: var(--bg-elev);
+  border-top: 1px solid #26262f;
+  display: flex;
+  z-index: 20;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+body.on-home .bottom-nav { display: none; }
+.nav-btn {
+  flex: 1;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  position: relative;
+}
+.nav-btn span { font-size: 11px; font-weight: 600; }
+.nav-btn.active { color: var(--accent); }
+.nav-btn .badge {
+  position: absolute;
+  top: 6px;
+  right: calc(50% - 26px);
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  font-style: normal;
+  border-radius: 999px;
+  min-width: 17px;
+  height: 17px;
+  line-height: 17px;
+  text-align: center;
+  padding: 0 4px;
+}
+
+/* ====== Lightbox ====== */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.92);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.lightbox-close { position: absolute; top: 16px; right: 16px; }
+
+/* ====== Toast ====== */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--nav-h) + 18px);
+  transform: translateX(-50%);
+  background: var(--bg-card);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: var(--shadow);
+  z-index: 60;
+  animation: toast-in 0.2s ease;
+  max-width: 90vw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(10px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+@media (min-width: 700px) {
+  .card-stack { max-width: 560px; }
+  .photo-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+}
