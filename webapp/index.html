@@ -55,6 +55,12 @@
         </button>
       </div>
 
+      <!-- Daftar tag (mode Android) -->
+      <div id="tag-section" class="hidden">
+        <h2 class="section-label">🏷 Tag</h2>
+        <div id="tag-list" class="tag-list"></div>
+      </div>
+
       <div id="month-section" class="hidden">
         <h2 class="section-label">Berdasarkan Bulan</h2>
         <div id="month-list" class="month-list"></div>
@@ -130,11 +136,11 @@
     <p id="album-empty-msg" class="muted center hidden">Album ini masih kosong.</p>
   </section>
 
-  <!-- ============ Layar Foto dengan Orang ============ -->
+  <!-- ============ Layar Tag (hasil wajah = tag "Orang") ============ -->
   <section id="screen-faces" class="screen">
     <header class="list-header">
       <button class="sb-icon btn-back" title="Kembali">←</button>
-      <h2>👤 Dengan Orang <span id="faces-count" class="count-badge">0</span></h2>
+      <h2><span id="faces-title">👤 Orang</span> <span id="faces-count" class="count-badge">0</span></h2>
       <button id="btn-rescan" class="btn btn-secondary btn-sm hidden">Pindai Ulang</button>
     </header>
 
@@ -175,16 +181,25 @@
     <div id="sel-bar" class="sel-bar hidden">
       <button id="btn-sel-cancel" class="sb-icon" title="Batal">✕</button>
       <span id="sel-count" class="sel-count">0 dipilih</span>
-      <button id="btn-sel-move" class="btn btn-primary btn-sm">📁 Pindahkan</button>
-      <button id="btn-sel-delete" class="btn btn-danger btn-sm">🗑 Hapus</button>
+      <button id="btn-sel-tag" class="btn btn-secondary btn-sm">🏷 Tag</button>
+      <button id="btn-sel-move" class="btn btn-primary btn-sm">📁</button>
+      <button id="btn-sel-delete" class="btn btn-danger btn-sm">🗑</button>
     </div>
 
     <div id="faces-footer" class="faces-footer hidden">
       <button id="btn-move-all-faces" class="btn btn-primary btn-lg">📁 Pindahkan Semua ke Album…</button>
       <button id="btn-clean-unmoved" class="btn btn-danger btn-lg">🧹 Hapus yang belum di-album</button>
-      <p class="smart-meta center-note">Pinch dua jari pada grid untuk memperbesar/memperkecil foto</p>
+      <p class="smart-meta center-note">Tag hanya catatan di aplikasi — foto tidak dipindah sampai kamu memindahkannya. Pinch dua jari untuk zoom grid.</p>
     </div>
   </section>
+
+  <!-- ============ Sheet pemilih tag ============ -->
+  <div id="tag-picker" class="sheet-backdrop hidden">
+    <div class="sheet">
+      <div class="sheet-title" id="tag-picker-title">Beri tag…</div>
+      <div id="tag-picker-list" class="sheet-list"></div>
+    </div>
+  </div>
 
   <!-- ============ Sheet jumlah pemindaian ============ -->
   <div id="scan-sheet" class="sheet-backdrop hidden">

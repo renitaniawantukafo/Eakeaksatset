@@ -20,6 +20,11 @@ Aplikasi web (PWA) untuk merapikan galeri foto dengan gesture swipe, terinspiras
   **jeda** kapan saja dan lanjutkan dari **daftar sesi tertunda**, foto yang
   sudah dipindai **otomatis dilewati selamanya**, hasil **dikelompokkan per
   bulan** dengan tombol pindah per bulan atau pindahkan semuanya sekaligus.
+- **🏷 Sistem tag** — hasil deteksi wajah otomatis diberi **tag "Orang"**
+  (hanya catatan di aplikasi, file tidak dipindah); buat tag lain dan tandai
+  foto manual lewat seleksi; daftar tag tampil di layar Susun; pindahkan foto
+  ke album **berdasarkan tag** kapan saja. Pemindaian berikutnya otomatis
+  **melewati foto yang sudah ber-tag** (tag apa pun) atau sudah dipindai.
 - **☑ Seleksi massal** — mode Pilih: ketuk foto satu-satu atau **seret jari**
   melintasi grid untuk memilih banyak foto sekaligus (dengan gulir otomatis di
   tepi), lalu pindahkan atau hapus yang terpilih.

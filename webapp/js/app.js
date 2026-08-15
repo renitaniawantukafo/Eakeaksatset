@@ -37,7 +37,12 @@ const state = {
   gridCols: parseInt(localStorage.getItem('gridCols') || '3', 10),
   lastMoveAlbum: null,
   lastDeleteWasSelection: false,
+  photoTags: new Map(), // key -> {key, tags:[], movedTo, updatedAt}
+  tagDefs: [], // {name, createdAt}
+  currentTag: 'Orang', // tag yang sedang dibuka di layar tag
 };
+
+const TAG_ORANG = 'Orang';
 
 const urlCache = new Map();
 
@@ -230,6 +235,22 @@ async function renderOrganize() {
     else if (paused > 0) meta += ` · ⏸ ${paused} sesi tertunda`;
     $('#smart-faces-meta').textContent = meta;
   }
+
+  // Daftar tag
+  const tagNames = isNative && state.permission ? allTagNames() : [];
+  $('#tag-section').classList.toggle('hidden', tagNames.length === 0);
+  const tagList = $('#tag-list');
+  tagList.innerHTML = '';
+  tagNames
+    .map((name) => ({ name, count: tagMembers(name).length }))
+    .sort((a, b) => b.count - a.count)
+    .forEach(({ name, count }) => {
+      const row = document.createElement('button');
+      row.className = 'tag-row';
+      row.innerHTML = `<span>${name === TAG_ORANG ? '👤' : '🏷'} ${esc(name)}</span><span class="cnt">${count} foto</span>`;
+      row.addEventListener('click', () => openTagView(name));
+      tagList.appendChild(row);
+    });
 
   const list = $('#month-list');
   list.innerHTML = '';
@@ -501,17 +522,18 @@ window.addEventListener('ng-moves-done', async (e) => {
   }
   await db.deleteDecisions(moved.map(String));
   moved.forEach((id) => state.decisions.delete(String(id)));
-  // Tandai foto berwajah yang berhasil dipindahkan (dipakai fitur bersihkan)
+  // Tandai foto ber-tag yang berhasil dipindahkan (dipakai fitur bersihkan)
   if (state.lastMoveAlbum) {
     const updated = [];
     moved.forEach((id) => {
-      const rec = state.faces.get(String(id));
+      const rec = state.photoTags.get(String(id));
       if (rec) {
         rec.movedTo = state.lastMoveAlbum;
+        rec.updatedAt = Date.now();
         updated.push(rec);
       }
     });
-    if (updated.length) await db.putFaces(updated);
+    if (updated.length) await db.putPhotoTags(updated);
     state.lastMoveAlbum = null;
   }
   if (state.sel.active) setSelectionMode(false);
@@ -530,9 +552,11 @@ window.addEventListener('ng-deletes-done', async (e) => {
   const ids = deleted.map(String);
   await db.deleteDecisions(ids);
   await db.deleteFaces(ids);
+  await db.deletePhotoTags(ids);
   ids.forEach((id) => {
     state.decisions.delete(id);
     state.faces.delete(id);
+    state.photoTags.delete(id);
     state.sel.keys.delete(id);
   });
   toast(`🧹 ${deleted.length} foto dihapus dari galeri`);
@@ -551,8 +575,64 @@ window.addEventListener('ng-permission', (e) => {
   renderOrganize();
 });
 
+// ---------- Tag ----------
+const tagsOf = (key) => {
+  const rec = state.photoTags.get(key);
+  return rec ? rec.tags : [];
+};
+
+const tagMembers = (tag) =>
+  [...state.photoTags.values()].filter((r) => r.tags.includes(tag)).map((r) => r.key);
+
+function allTagNames() {
+  const names = new Set(state.tagDefs.map((d) => d.name));
+  for (const rec of state.photoTags.values()) rec.tags.forEach((t) => names.add(t));
+  return [...names];
+}
+
+async function ensureTagDef(name) {
+  if (!state.tagDefs.some((d) => d.name === name)) {
+    const def = { name, createdAt: Date.now() };
+    state.tagDefs.push(def);
+    await db.putTagDef(def);
+  }
+}
+
+async function addTagTo(keys, tag) {
+  await ensureTagDef(tag);
+  const updated = [];
+  keys.forEach((key) => {
+    let rec = state.photoTags.get(key);
+    if (!rec) {
+      rec = { key, tags: [], movedTo: null, updatedAt: Date.now() };
+      state.photoTags.set(key, rec);
+    }
+    if (!rec.tags.includes(tag)) {
+      rec.tags.push(tag);
+      rec.updatedAt = Date.now();
+      updated.push(rec);
+    }
+  });
+  if (updated.length) await db.putPhotoTags(updated);
+  return updated.length;
+}
+
+async function removeTagFrom(keys, tag) {
+  const updated = [];
+  keys.forEach((key) => {
+    const rec = state.photoTags.get(key);
+    if (rec && rec.tags.includes(tag)) {
+      rec.tags = rec.tags.filter((t) => t !== tag);
+      rec.updatedAt = Date.now();
+      updated.push(rec);
+    }
+  });
+  if (updated.length) await db.putPhotoTags(updated);
+  return updated.length;
+}
+
 // ---------- Deteksi wajah ----------
-const faceKeys = () => [...state.faces.values()].filter((f) => f.faces > 0).map((f) => f.key);
+const faceKeys = () => tagMembers(TAG_ORANG);
 
 function refreshAllIds() {
   state.allIds = JSON.parse(native.listAllIds())
@@ -560,9 +640,12 @@ function refreshAllIds() {
     .sort((a, b) => b.taken - a.taken);
 }
 
-// Foto yang belum pernah dipindai — yang sudah ada di cache SELALU dilewati
+// Foto yang belum pernah dipindai DAN belum ber-tag apa pun —
+// yang sudah dipindai atau sudah ber-tag SELALU dilewati
 function unscannedIds() {
-  return state.allIds.filter((p) => !state.faces.has(p.id)).map((p) => p.id);
+  return state.allIds
+    .filter((p) => !state.faces.has(p.id) && tagsOf(p.id).length === 0)
+    .map((p) => p.id);
 }
 
 function takenOf(key) {
@@ -574,31 +657,50 @@ const pausedSessions = () => state.scans.filter((s) => s.status === 'paused');
 
 function renderFaces() {
   if (state.mode === 'native' && state.permission && !state.scanning) refreshAllIds();
-  const found = faceKeys();
+  const tag = state.currentTag;
+  const isOrang = tag === TAG_ORANG;
+  const members = tagMembers(tag);
   const scanned = state.faces.size;
   const pending = state.mode === 'native' && state.permission ? unscannedIds().length : 0;
   const paused = pausedSessions();
 
-  $('#faces-count').textContent = found.length;
-  $('#faces-intro').classList.toggle('hidden', state.scanning || scanned > 0 || paused.length > 0);
+  $('#faces-title').textContent = isOrang ? '👤 Orang' : `🏷 ${tag}`;
+  $('#faces-count').textContent = members.length;
+  // UI pemindaian hanya relevan di tag "Orang"
+  $('#faces-intro').classList.toggle('hidden',
+    !isOrang || state.scanning || scanned > 0 || paused.length > 0);
   $('#faces-progress').classList.toggle('hidden', !state.scanning);
-  $('#faces-body').classList.toggle('hidden', state.scanning || (scanned === 0 && paused.length === 0));
-  $('#faces-empty-msg').classList.toggle('hidden', scanned === 0 || found.length > 0);
-  $('#faces-footer').classList.toggle('hidden', state.scanning || found.length === 0);
-  $('#btn-rescan').classList.toggle('hidden', state.scanning || scanned === 0);
+  $('#faces-body').classList.toggle('hidden',
+    state.scanning || (isOrang && scanned === 0 && paused.length === 0));
+  $('#faces-empty-msg').classList.toggle('hidden', (isOrang && scanned === 0) || members.length > 0);
+  $('#faces-empty-msg').textContent = isOrang
+    ? 'Tidak ditemukan foto dengan wajah orang.'
+    : 'Belum ada foto dengan tag ini. Tandai lewat mode Pilih → 🏷 Tag.';
+  $('#faces-footer').classList.toggle('hidden', state.scanning || members.length === 0 || state.sel.active);
+  $('#btn-move-all-faces').textContent = `📁 Pindahkan Semua “${tag}” ke Album…`;
+  $('#btn-rescan').classList.toggle('hidden', !isOrang || state.scanning || scanned === 0);
   $('#btn-rescan').textContent = pending > 0 ? `Pindai lagi (${pending} tersisa)` : 'Semua sudah dipindai';
   $('#btn-rescan').disabled = pending === 0;
   $('#faces-scan-note').textContent = pending > 0 ? `${pending} foto belum dipindai` : '';
-  $('#faces-stats').textContent = scanned > 0
-    ? `${scanned} foto sudah dipindai (otomatis dilewati) · ${pending} belum dipindai · ${found.length} berisi orang`
-    : '';
-  const unmoved = unmovedFaceKeys().length;
+  $('#faces-stats').textContent = isOrang && scanned > 0
+    ? `${scanned} dipindai · ${pending} belum (yang ber-tag/terpindai dilewati) · ${members.length} ber-tag Orang`
+    : `${members.length} foto ber-tag “${tag}”`;
+  const unmoved = unmovedTagKeys().length;
   $('#btn-clean-unmoved').textContent = `🧹 Hapus yang belum di-album (${unmoved})`;
   $('#btn-clean-unmoved').disabled = unmoved === 0;
 
   renderScanSessions();
   updateSelBar();
-  if (!state.scanning) renderFaceGroups(found);
+  if (!state.scanning) renderFaceGroups(members);
+}
+
+function openTagView(tag) {
+  state.currentTag = tag;
+  if (state.sel.active) {
+    state.sel.active = false;
+    state.sel.keys.clear();
+  }
+  showScreen('faces');
 }
 
 function renderScanSessions() {
@@ -658,7 +760,8 @@ function renderFaceGroups(found) {
     const grid = document.createElement('div');
     grid.className = 'photo-grid static';
     keys.forEach((key) => {
-      const rec = state.faces.get(key);
+      const faceRec = state.faces.get(key);
+      const tagRec = state.photoTags.get(key);
       const cell = document.createElement('div');
       cell.className = 'grid-item selectable' + (state.sel.keys.has(key) ? ' selected' : '');
       cell.dataset.key = key;
@@ -667,14 +770,17 @@ function renderFaceGroups(found) {
       img.alt = '';
       img.loading = 'lazy';
       img.draggable = false;
-      const mark = document.createElement('span');
-      mark.className = 'face-mark';
-      mark.textContent = `👤${rec.faces}`;
-      cell.append(img, mark);
-      if (rec.movedTo) {
+      cell.appendChild(img);
+      if (faceRec && faceRec.faces > 0) {
+        const mark = document.createElement('span');
+        mark.className = 'face-mark';
+        mark.textContent = `👤${faceRec.faces}`;
+        cell.appendChild(mark);
+      }
+      if (tagRec && tagRec.movedTo) {
         const moved = document.createElement('span');
         moved.className = 'moved-mark';
-        moved.textContent = `📁 ${rec.movedTo}`;
+        moved.textContent = `📁 ${tagRec.movedTo}`;
         cell.appendChild(moved);
       }
       if (state.sel.keys.has(key)) {
@@ -738,10 +844,56 @@ function refreshCellSelection(key) {
 function updateSelBar() {
   const n = state.sel.keys.size;
   $('#sel-bar').classList.toggle('hidden', !state.sel.active);
-  $('#faces-footer').classList.toggle('hidden', state.sel.active || state.scanning || faceKeys().length === 0);
+  $('#faces-footer').classList.toggle('hidden',
+    state.sel.active || state.scanning || tagMembers(state.currentTag).length === 0);
   $('#sel-count').textContent = `${n} dipilih`;
+  $('#btn-sel-tag').disabled = n === 0;
   $('#btn-sel-move').disabled = n === 0;
   $('#btn-sel-delete').disabled = n === 0;
+}
+
+// ---------- Sheet pemilih tag ----------
+function openTagPicker(keys) {
+  if (!keys.length) return;
+  $('#tag-picker-title').textContent = `🏷 Tag untuk ${keys.length} foto`;
+  const list = $('#tag-picker-list');
+  list.innerHTML = '';
+  allTagNames().forEach((name) => {
+    const btn = document.createElement('button');
+    btn.className = 'sheet-album';
+    btn.innerHTML = `<span>${name === TAG_ORANG ? '👤' : '🏷'} ${esc(name)}</span><span class="cnt">${tagMembers(name).length}</span>`;
+    btn.addEventListener('click', async () => {
+      $('#tag-picker').classList.add('hidden');
+      const added = await addTagTo(keys, name);
+      toast(`🏷 ${added} foto diberi tag “${name}”`);
+      setSelectionMode(false);
+    });
+    list.appendChild(btn);
+  });
+  const add = document.createElement('button');
+  add.className = 'sheet-album';
+  add.innerHTML = '<span>＋ Tag baru…</span>';
+  add.addEventListener('click', async () => {
+    const name = (prompt('Nama tag baru:') || '').trim();
+    if (!name) return;
+    $('#tag-picker').classList.add('hidden');
+    const added = await addTagTo(keys, name);
+    toast(`🏷 ${added} foto diberi tag “${name}”`);
+    setSelectionMode(false);
+  });
+  list.appendChild(add);
+  // Lepas tag yang sedang dibuka dari foto terpilih
+  const remove = document.createElement('button');
+  remove.className = 'sheet-album';
+  remove.innerHTML = `<span>➖ Lepas tag “${esc(state.currentTag)}” dari terpilih</span>`;
+  remove.addEventListener('click', async () => {
+    $('#tag-picker').classList.add('hidden');
+    const removed = await removeTagFrom(keys, state.currentTag);
+    toast(`➖ Tag dilepas dari ${removed} foto`);
+    setSelectionMode(false);
+  });
+  list.appendChild(remove);
+  $('#tag-picker').classList.remove('hidden');
 }
 
 // Seret jari melintasi grid untuk memilih banyak foto sekaligus
@@ -829,16 +981,20 @@ function bindPinchZoom() {
 }
 
 // ---------- Hapus otomatis yang belum dipindahkan ke album ----------
-const unmovedFaceKeys = () => faceKeys().filter((k) => !state.faces.get(k).movedTo);
+const unmovedTagKeys = () =>
+  tagMembers(state.currentTag).filter((k) => {
+    const rec = state.photoTags.get(k);
+    return !rec || !rec.movedTo;
+  });
 
 function cleanUnmoved() {
-  const keys = unmovedFaceKeys();
+  const keys = unmovedTagKeys();
   if (!keys.length) {
-    toast('Semua foto berwajah sudah dipindahkan ke album 🎉');
+    toast('Semua foto ber-tag ini sudah dipindahkan ke album 🎉');
     return;
   }
   const ok = confirm(
-    `Hapus ${keys.length} foto berwajah yang BELUM dipindahkan ke album?\n\n` +
+    `Hapus ${keys.length} foto ber-tag “${state.currentTag}” yang BELUM dipindahkan ke album?\n\n` +
     `Foto yang sudah dipindahkan (bertanda 📁) aman. Android akan minta konfirmasi sekali lagi.`
   );
   if (!ok) return;
@@ -946,12 +1102,19 @@ function updateScanProgressUI() {
   if (state.scanning) meta.textContent = `🔍 Memindai… ${state.scanDone} / ${state.scanTotal}`;
 }
 
-window.addEventListener('ng-face-batch', async (e) => {
-  const results = (e.detail && e.detail.results) || [];
+// Antrean pemrosesan batch: ng-face-done harus menunggu semua batch selesai
+// ditulis (tag + cache), kalau tidak render akhir bisa mendahului data
+let faceBatchChain = Promise.resolve();
+
+async function processFaceBatch(detail) {
+  const results = (detail && detail.results) || [];
   const now = Date.now();
   const records = results.map((r) => ({ key: String(r.id), faces: r.faces, scannedAt: now }));
   records.forEach((r) => state.faces.set(r.key, r));
   await db.putFaces(records);
+  // Foto berwajah otomatis diberi TAG (tidak dipindahkan ke folder mana pun)
+  const withFaces = records.filter((r) => r.faces > 0).map((r) => r.key);
+  if (withFaces.length) await addTagTo(withFaces, TAG_ORANG);
   state.scanDone += records.length;
   const s = state.scanSession;
   if (s) {
@@ -961,9 +1124,14 @@ window.addEventListener('ng-face-batch', async (e) => {
     await db.putScan(s);
   }
   updateScanProgressUI();
+}
+
+window.addEventListener('ng-face-batch', (e) => {
+  faceBatchChain = faceBatchChain.then(() => processFaceBatch(e.detail)).catch(() => {});
 });
 
 window.addEventListener('ng-face-done', async (e) => {
+  await faceBatchChain;
   state.scanning = false;
   const cancelled = e.detail && e.detail.cancelled;
   const s = state.scanSession;
@@ -1309,14 +1477,19 @@ function bindEvents() {
   $('#btn-grant').addEventListener('click', () => native && native.requestPermission());
   $('#btn-apply-moves').addEventListener('click', applyMoves);
 
-  $('#smart-faces-card').addEventListener('click', () => showScreen('faces'));
+  $('#smart-faces-card').addEventListener('click', () => openTagView(TAG_ORANG));
   $('#btn-scan-faces').addEventListener('click', openScanSheet);
   $('#btn-rescan').addEventListener('click', openScanSheet);
   $('#btn-pause-scan').addEventListener('click', () => native && native.cancelScan());
-  $('#btn-move-all-faces').addEventListener('click', () => openAlbumPicker(faceKeys(), 'semua'));
+  $('#btn-move-all-faces').addEventListener('click', () =>
+    openAlbumPicker(tagMembers(state.currentTag), `tag ${state.currentTag}`));
   $('#btn-clean-unmoved').addEventListener('click', cleanUnmoved);
   $('#btn-select-mode').addEventListener('click', () => setSelectionMode(!state.sel.active));
   $('#btn-sel-cancel').addEventListener('click', () => setSelectionMode(false));
+  $('#btn-sel-tag').addEventListener('click', () => openTagPicker([...state.sel.keys]));
+  $('#tag-picker').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) $('#tag-picker').classList.add('hidden');
+  });
   $('#btn-sel-move').addEventListener('click', () =>
     openAlbumPicker([...state.sel.keys], `${state.sel.keys.size} dipilih`));
   $('#btn-sel-delete').addEventListener('click', () => {
@@ -1406,6 +1579,7 @@ function bindEvents() {
       $('#help-overlay').classList.add('hidden');
       $('#album-picker').classList.add('hidden');
       $('#scan-sheet').classList.add('hidden');
+      $('#tag-picker').classList.add('hidden');
       return;
     }
     if (!$('#screen-sort').classList.contains('active')) return;
@@ -1431,17 +1605,37 @@ function bindEvents() {
 async function init() {
   bindEvents();
   try {
-    const [albums, decisions, faces, scans, photos] = await Promise.all([
+    const [albums, decisions, faces, scans, photoTags, tagDefs, photos] = await Promise.all([
       db.getAllAlbums(),
       db.getAllDecisions(),
       db.getAllFaces(),
       db.getAllScans(),
+      db.getAllPhotoTags(),
+      db.getAllTagDefs(),
       state.mode === 'web' ? db.getAllPhotos() : Promise.resolve([]),
     ]);
     state.customAlbums = albums.sort((a, b) => a.createdAt - b.createdAt);
     decisions.forEach((d) => state.decisions.set(d.key, d));
     faces.forEach((f) => state.faces.set(f.key, f));
     state.scans = scans.sort((a, b) => b.createdAt - a.createdAt);
+    photoTags.forEach((r) => state.photoTags.set(r.key, r));
+    state.tagDefs = tagDefs.sort((a, b) => a.createdAt - b.createdAt);
+
+    // Migrasi dari versi lama: hasil pindai berwajah menjadi tag "Orang",
+    // dan movedTo lama ikut dipindah ke record tag
+    const legacy = faces.filter((f) => f.faces > 0 && !tagsOf(f.key).includes(TAG_ORANG));
+    if (legacy.length) {
+      await addTagTo(legacy.map((f) => f.key), TAG_ORANG);
+      const withMoved = [];
+      legacy.forEach((f) => {
+        if (f.movedTo) {
+          const rec = state.photoTags.get(f.key);
+          rec.movedTo = f.movedTo;
+          withMoved.push(rec);
+        }
+      });
+      if (withMoved.length) await db.putPhotoTags(withMoved);
+    }
     state.webPhotos = photos.sort((a, b) => (a.takenAt || a.addedAt) - (b.takenAt || b.addedAt));
   } catch (err) {
     console.error('Gagal memuat basis data', err);

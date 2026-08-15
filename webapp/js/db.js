@@ -5,9 +5,12 @@
 // faces     : cache hasil deteksi wajah { key, faces, scannedAt } — foto yang sudah
 //             ada di sini TIDAK pernah dipindai ulang
 // scans     : sesi pemindaian { id, target, done, found, status:'paused'|'done', createdAt, updatedAt }
+// phototags : tag per foto { key, tags:[nama], movedTo, updatedAt } — foto ber-tag
+//             tidak diikutkan pemindaian berikutnya
+// tagdefs   : daftar tag yang pernah dibuat { name, createdAt }
 
 const DB_NAME = 'swipesort';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 let dbPromise = null;
 
@@ -33,6 +36,12 @@ function openDB() {
       }
       if (!db.objectStoreNames.contains('scans')) {
         db.createObjectStore('scans', { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains('phototags')) {
+        db.createObjectStore('phototags', { keyPath: 'key' });
+      }
+      if (!db.objectStoreNames.contains('tagdefs')) {
+        db.createObjectStore('tagdefs', { keyPath: 'name' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -91,6 +100,13 @@ export const db = {
   putScan: (scan) => tx('scans', 'readwrite', (s) => s.put(scan)),
   deleteScan: (id) => tx('scans', 'readwrite', (s) => s.delete(id)),
   getAllScans: () => getAll('scans'),
+
+  putPhotoTags: (records) => tx('phototags', 'readwrite', (s) => records.forEach((r) => s.put(r))),
+  deletePhotoTags: (keys) => tx('phototags', 'readwrite', (s) => keys.forEach((k) => s.delete(k))),
+  getAllPhotoTags: () => getAll('phototags'),
+
+  putTagDef: (def) => tx('tagdefs', 'readwrite', (s) => s.put(def)),
+  getAllTagDefs: () => getAll('tagdefs'),
 };
 
 export function uid() {
