@@ -1,9 +1,10 @@
 // ====== Lapisan penyimpanan IndexedDB ======
-// photos : { id, name, type, blob, addedAt, status: 'inbox'|'kept'|'trash', albumId, sortedAt }
-// albums : { id, name, createdAt }
+// photos    : (mode web) { id, name, type, blob, addedAt, takenAt, status: 'inbox'|'kept'|'trash', albumId }
+// albums    : { id, name, createdAt }  — album buatan pengguna (mode web & nama album baru mode native)
+// decisions : (mode native) { key, action: 'keep'|'trash'|'move', album, monthKey, name, takenAt }
 
 const DB_NAME = 'swipesort';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbPromise = null;
 
@@ -20,6 +21,9 @@ function openDB() {
       }
       if (!db.objectStoreNames.contains('albums')) {
         db.createObjectStore('albums', { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains('decisions')) {
+        db.createObjectStore('decisions', { keyPath: 'key' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -49,42 +53,26 @@ function reqToPromise(request) {
   });
 }
 
+async function getAll(storeName) {
+  const database = await openDB();
+  const store = database.transaction(storeName).objectStore(storeName);
+  return reqToPromise(store.getAll());
+}
+
 export const db = {
-  async addPhotos(photos) {
-    return tx('photos', 'readwrite', (store) => {
-      photos.forEach((p) => store.put(p));
-    });
-  },
+  addPhotos: (photos) => tx('photos', 'readwrite', (s) => photos.forEach((p) => s.put(p))),
+  putPhoto: (photo) => tx('photos', 'readwrite', (s) => s.put(photo)),
+  deletePhotos: (ids) => tx('photos', 'readwrite', (s) => ids.forEach((id) => s.delete(id))),
+  getAllPhotos: () => getAll('photos'),
 
-  async putPhoto(photo) {
-    return tx('photos', 'readwrite', (store) => store.put(photo));
-  },
+  putAlbum: (album) => tx('albums', 'readwrite', (s) => s.put(album)),
+  deleteAlbum: (id) => tx('albums', 'readwrite', (s) => s.delete(id)),
+  getAllAlbums: () => getAll('albums'),
 
-  async deletePhotos(ids) {
-    return tx('photos', 'readwrite', (store) => {
-      ids.forEach((id) => store.delete(id));
-    });
-  },
-
-  async getAllPhotos() {
-    const database = await openDB();
-    const store = database.transaction('photos').objectStore('photos');
-    return reqToPromise(store.getAll());
-  },
-
-  async putAlbum(album) {
-    return tx('albums', 'readwrite', (store) => store.put(album));
-  },
-
-  async deleteAlbum(id) {
-    return tx('albums', 'readwrite', (store) => store.delete(id));
-  },
-
-  async getAllAlbums() {
-    const database = await openDB();
-    const store = database.transaction('albums').objectStore('albums');
-    return reqToPromise(store.getAll());
-  },
+  putDecision: (d) => tx('decisions', 'readwrite', (s) => s.put(d)),
+  deleteDecision: (key) => tx('decisions', 'readwrite', (s) => s.delete(key)),
+  deleteDecisions: (keys) => tx('decisions', 'readwrite', (s) => keys.forEach((k) => s.delete(k))),
+  getAllDecisions: () => getAll('decisions'),
 };
 
 export function uid() {

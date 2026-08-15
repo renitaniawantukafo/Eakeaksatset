@@ -1,82 +1,235 @@
-// ====== SwipeSort — aplikasi penyortir galeri ala Slidebox ======
+// ====== SwipeSort — penyortir galeri ala Slidebox ======
+// Dua mode data dengan UI yang sama:
+//  - native : di dalam APK Android; foto dibaca langsung dari galeri (MediaStore)
+//             lewat jembatan window.NativeGallery. Keputusan (buang/pindah)
+//             disimpan dulu, lalu diterapkan sekaligus lewat dialog sistem.
+//  - web    : di browser; foto diimpor manual, disimpan di IndexedDB,
+//             dikelompokkan per bulan dari tanggal berkas.
 import { db, uid } from './db.js';
+
+const native = window.NativeGallery || null;
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
 
 // ---------- State ----------
 const state = {
-  photos: [], // semua record foto
-  albums: [],
-  cursor: 0, // posisi di dalam inbox
-  undoStack: [], // { photoId, prevStatus, prevAlbumId, prevCursor }
-  currentAlbumId: null, // untuk layar detail album
+  mode: native ? 'native' : 'web',
+  permission: false,
+  months: [], // {key:'2024-05', label:'Mei 2024', count}
+  albums: [], // {name, count, coverUrl}
+  customAlbums: [], // album buatan pengguna (record db.albums)
+  webPhotos: [], // mode web: semua record foto
+  decisions: new Map(), // photoKey -> {action:'keep'|'trash'|'move', album, monthKey, name, takenAt}
+  month: null, // {key,label}
+  photos: [], // foto bulan aktif: {key, name, takenAt, url(w)->string}
+  cursor: 0,
+  undoStack: [], // {photoKey, prev:decision|null, cursor}
+  currentAlbumName: null,
+  committing: false,
 };
 
-const urlCache = new Map(); // photoId -> objectURL
+const urlCache = new Map();
 
-// ---------- Util DOM ----------
+// ---------- Util ----------
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
 
-function photoURL(photo) {
-  if (!urlCache.has(photo.id)) {
-    urlCache.set(photo.id, URL.createObjectURL(photo.blob));
-  }
-  return urlCache.get(photo.id);
-}
-
-function revokeURL(photoId) {
-  const url = urlCache.get(photoId);
-  if (url) {
-    URL.revokeObjectURL(url);
-    urlCache.delete(photoId);
-  }
+function esc(str) {
+  const d = document.createElement('div');
+  d.textContent = str == null ? '' : String(str);
+  return d.innerHTML;
 }
 
 let toastTimer = null;
-function toast(msg) {
+function toast(msg, actionLabel, actionFn) {
   const el = $('#toast');
-  el.textContent = msg;
+  el.innerHTML = '';
+  el.append(document.createTextNode(msg));
+  if (actionLabel) {
+    const b = document.createElement('button');
+    b.textContent = actionLabel;
+    b.addEventListener('click', () => {
+      el.classList.add('hidden');
+      actionFn();
+    });
+    el.appendChild(b);
+  }
   el.classList.remove('hidden');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.add('hidden'), 2200);
+  toastTimer = setTimeout(() => el.classList.add('hidden'), actionLabel ? 3600 : 2200);
 }
 
-// ---------- Turunan state ----------
-const inbox = () => state.photos.filter((p) => p.status === 'inbox');
-const trashed = () => state.photos.filter((p) => p.status === 'trash');
-const sortedCount = () => state.photos.filter((p) => p.status === 'kept').length;
-const albumPhotos = (albumId) => state.photos.filter((p) => p.status === 'kept' && p.albumId === albumId);
-const findPhoto = (id) => state.photos.find((p) => p.id === id);
-const findAlbum = (id) => state.albums.find((a) => a.id === id);
-
-function clampCursor() {
-  const n = inbox().length;
-  if (n === 0) state.cursor = 0;
-  else state.cursor = Math.min(Math.max(0, state.cursor), n - 1);
+function fmtDate(ms) {
+  if (!ms) return '';
+  const d = new Date(ms);
+  let h = d.getHours();
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')} ${h}:${mm} ${ampm}`;
 }
+
+function monthKeyOf(ms) {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function monthLabelOf(key) {
+  const [y, m] = key.split('-').map(Number);
+  return `${MONTH_NAMES[m - 1]} ${y}`;
+}
+
+// ---------- Sumber data ----------
+function photoUrl(photo, width) {
+  if (state.mode === 'native') {
+    return width ? `/media/${photo.key}?w=${width}` : `/media/${photo.key}`;
+  }
+  if (!urlCache.has(photo.key)) {
+    const rec = state.webPhotos.find((p) => p.id === photo.key);
+    if (!rec) return '';
+    urlCache.set(photo.key, URL.createObjectURL(rec.blob));
+  }
+  return urlCache.get(photo.key);
+}
+
+async function loadMonths() {
+  if (state.mode === 'native') {
+    state.months = state.permission ? JSON.parse(native.listMonths()) : [];
+  } else {
+    const groups = new Map();
+    for (const p of state.webPhotos) {
+      const key = monthKeyOf(p.takenAt || p.addedAt);
+      groups.set(key, (groups.get(key) || 0) + 1);
+    }
+    state.months = [...groups.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([key, count]) => ({ key, label: monthLabelOf(key), count }));
+  }
+}
+
+async function loadAlbums() {
+  const custom = state.customAlbums.map((a) => ({ name: a.name, count: 0, custom: true }));
+  if (state.mode === 'native') {
+    const device = state.permission ? JSON.parse(native.listAlbums()) : [];
+    const deviceNames = new Set(device.map((a) => a.name));
+    state.albums = [...device, ...custom.filter((c) => !deviceNames.has(c.name))];
+  } else {
+    const counts = new Map();
+    for (const p of state.webPhotos) {
+      if (p.status === 'kept' && p.albumId) counts.set(p.albumId, (counts.get(p.albumId) || 0) + 1);
+    }
+    state.albums = state.customAlbums.map((a) => ({
+      name: a.name,
+      id: a.id,
+      count: counts.get(a.id) || 0,
+      custom: true,
+    }));
+  }
+}
+
+function monthPhotos(monthKey) {
+  if (state.mode === 'native') {
+    return JSON.parse(native.listPhotos(monthKey)).map((p) => ({
+      key: String(p.id),
+      name: p.name,
+      takenAt: p.taken,
+    }));
+  }
+  return state.webPhotos
+    .filter((p) => monthKeyOf(p.takenAt || p.addedAt) === monthKey)
+    .sort((a, b) => (a.takenAt || a.addedAt) - (b.takenAt || b.addedAt))
+    .map((p) => ({ key: p.id, name: p.name, takenAt: p.takenAt || p.addedAt }));
+}
+
+// ---------- Keputusan ----------
+async function setDecision(photo, decision) {
+  const prev = state.decisions.get(photo.key) || null;
+  state.undoStack.push({ photoKey: photo.key, prev, cursor: state.cursor });
+  const record = decision && {
+    key: photo.key,
+    monthKey: state.month.key,
+    name: photo.name,
+    takenAt: photo.takenAt,
+    ...decision,
+  };
+  if (record) {
+    state.decisions.set(photo.key, record);
+    await db.putDecision(record);
+  } else {
+    state.decisions.delete(photo.key);
+    await db.deleteDecision(photo.key);
+  }
+  updateBadges();
+}
+
+async function undo() {
+  const entry = state.undoStack.pop();
+  if (!entry) return;
+  if (entry.prev) {
+    state.decisions.set(entry.photoKey, entry.prev);
+    await db.putDecision(entry.prev);
+  } else {
+    state.decisions.delete(entry.photoKey);
+    await db.deleteDecision(entry.photoKey);
+  }
+  state.cursor = entry.cursor;
+  updateBadges();
+  renderSort();
+  toast('↩️ Diurungkan');
+}
+
+const trashKeys = () => [...state.decisions.values()].filter((d) => d.action === 'trash');
+const pendingMoves = () => [...state.decisions.values()].filter((d) => d.action === 'move');
 
 // ---------- Navigasi layar ----------
 function showScreen(name) {
   $$('.screen').forEach((s) => s.classList.remove('active'));
   $(`#screen-${name}`).classList.add('active');
-  document.body.classList.toggle('on-home', name === 'home');
   $$('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.nav === name));
-  if (name === 'sort') renderSort();
+  $$('.org-chips .chip').forEach((b) => b.classList.toggle('active', b.dataset.nav === name));
+  if (name === 'organize') renderOrganize();
   if (name === 'trash') renderTrash();
   if (name === 'albums') renderAlbumList();
-  if (name === 'home') renderHome();
 }
 
-// ---------- Beranda ----------
-function renderHome() {
-  const total = state.photos.length;
-  const hasData = total > 0;
-  $('#home-stats').classList.toggle('hidden', !hasData);
-  $('#stat-total').textContent = total;
-  $('#stat-sorted').textContent = sortedCount();
-  $('#stat-trash').textContent = trashed().length;
+// ---------- Layar Susun ----------
+async function renderOrganize() {
+  await loadMonths();
+  const isNative = state.mode === 'native';
+  $('#perm-gate').classList.toggle('hidden', !isNative || state.permission);
+  $('#import-gate').classList.toggle('hidden', isNative || state.months.length > 0);
+  $('#web-import-more').classList.toggle('hidden', isNative || state.months.length === 0);
+  $('#month-section').classList.toggle('hidden', state.months.length === 0);
+
+  const moves = pendingMoves();
+  $('#pending-banner').classList.toggle('hidden', !isNative || moves.length === 0);
+  $('#pending-text').textContent = `📁 ${moves.length} foto menunggu dipindahkan`;
+
+  const list = $('#month-list');
+  list.innerHTML = '';
+  state.months.forEach((m, i) => {
+    const decided = monthDecidedCount(m.key);
+    const row = document.createElement('button');
+    row.className = `month-row mc-${i % 6}`;
+    row.innerHTML = `<span>${decided >= m.count ? '<span class="done-mark">✔</span>' : ''}${esc(m.label)}</span><span class="count">${m.count}</span>`;
+    row.addEventListener('click', () => openMonth(m));
+    list.appendChild(row);
+  });
+  updateBadges();
 }
 
-// ---------- Impor ----------
+function monthDecidedCount(monthKey) {
+  let n = 0;
+  for (const d of state.decisions.values()) if (d.monthKey === monthKey) n++;
+  if (state.mode === 'web') {
+    for (const p of state.webPhotos) {
+      if (monthKeyOf(p.takenAt || p.addedAt) === monthKey && p.status !== 'inbox' && !state.decisions.has(p.id)) n++;
+    }
+  }
+  return n;
+}
+
+// ---------- Impor (mode web) ----------
 async function importFiles(fileList) {
   const files = [...fileList].filter((f) => f.type.startsWith('image/'));
   if (!files.length) {
@@ -90,82 +243,101 @@ async function importFiles(fileList) {
     type: f.type,
     blob: f,
     addedAt: now + i,
+    takenAt: f.lastModified || now,
     status: 'inbox',
     albumId: null,
-    sortedAt: null,
   }));
   await db.addPhotos(records);
-  state.photos.push(...records);
+  state.webPhotos.push(...records);
   toast(`📥 ${records.length} foto diimpor`);
+  renderOrganize();
+}
+
+// ---------- Buka bulan & layar sortir ----------
+function openMonth(month) {
+  state.month = month;
+  state.photos = monthPhotos(month.key);
+  state.undoStack = [];
+  // Mulai dari foto pertama yang belum diputuskan
+  const firstUndecided = state.photos.findIndex((p) => !isDecided(p));
+  state.cursor = firstUndecided === -1 ? 0 : firstUndecided;
   showScreen('sort');
-}
-
-// ---------- Aksi sortir ----------
-async function applyAction(photo, { status, albumId = null }) {
-  state.undoStack.push({
-    photoId: photo.id,
-    prevStatus: photo.status,
-    prevAlbumId: photo.albumId,
-    prevCursor: state.cursor,
-  });
-  photo.status = status;
-  photo.albumId = albumId;
-  photo.sortedAt = Date.now();
-  await db.putPhoto(photo);
-  clampCursor();
-  updateBadges();
-  $('#btn-undo').disabled = false;
-}
-
-async function undo() {
-  const entry = state.undoStack.pop();
-  if (!entry) return;
-  const photo = findPhoto(entry.photoId);
-  if (photo) {
-    photo.status = entry.prevStatus;
-    photo.albumId = entry.prevAlbumId;
-    await db.putPhoto(photo);
-  }
-  state.cursor = entry.prevCursor;
-  clampCursor();
-  $('#btn-undo').disabled = state.undoStack.length === 0;
-  toast('↩️ Diurungkan');
   renderSort();
 }
 
-// ---------- Render layar sortir ----------
+function isDecided(photo) {
+  if (state.decisions.has(photo.key)) return true;
+  if (state.mode === 'web') {
+    const rec = state.webPhotos.find((p) => p.id === photo.key);
+    return rec && rec.status !== 'inbox';
+  }
+  return false;
+}
+
+function currentPhoto() {
+  return state.photos[state.cursor] || null;
+}
+
 function renderSort() {
-  clampCursor();
-  const queue = inbox();
   const total = state.photos.length;
-  const done = total - queue.length;
+  if (total === 0) {
+    showScreen('organize');
+    return;
+  }
+  state.cursor = Math.min(Math.max(0, state.cursor), total - 1);
+  const photo = currentPhoto();
 
-  $('#progress-current').textContent = queue.length ? done + state.cursor + 1 : done;
-  $('#progress-total').textContent = total;
-  $('#progress-fill').style.width = total ? `${(done / total) * 100}%` : '0%';
-  $('#btn-undo').disabled = state.undoStack.length === 0;
+  $('#sort-month-label').textContent = state.month.label.toUpperCase();
+  $('#sp-pos').textContent = state.cursor + 1;
+  $('#sp-total').textContent = total;
+  $('#sp-date').textContent = fmtDate(photo.takenAt);
 
-  renderAlbumTabs();
+  renderDecisionBadge(photo);
+  renderAlbumChips();
   renderCardStack();
   updateBadges();
 }
 
-function renderAlbumTabs() {
+function decisionLabel(d) {
+  if (!d) return null;
+  if (d.action === 'trash') return '🗑 Akan dibuang';
+  if (d.action === 'move') return `📁 → ${d.album}`;
+  if (d.action === 'keep') return '✓ Disimpan';
+  return null;
+}
+
+function renderDecisionBadge(photo) {
+  let label = decisionLabel(state.decisions.get(photo.key));
+  if (!label && state.mode === 'web') {
+    const rec = state.webPhotos.find((p) => p.id === photo.key);
+    if (rec && rec.status === 'trash') label = '🗑 Akan dibuang';
+    else if (rec && rec.status === 'kept' && rec.albumId) {
+      const a = state.customAlbums.find((x) => x.id === rec.albumId);
+      label = `📁 → ${a ? a.name : 'album'}`;
+    } else if (rec && rec.status === 'kept') label = '✓ Disimpan';
+  }
+  const badge = $('#decision-badge');
+  badge.textContent = label || '';
+  badge.classList.toggle('hidden', !label);
+}
+
+async function renderAlbumChips() {
+  await loadAlbums();
   const wrap = $('#album-tabs');
   wrap.innerHTML = '';
   state.albums.forEach((album) => {
     const btn = document.createElement('button');
-    btn.className = 'album-tab';
-    btn.textContent = `📁 ${album.name}`;
-    btn.addEventListener('click', () => sortIntoAlbum(album));
+    btn.className = 'sb-album';
+    btn.innerHTML = `<span class="dl">⬇</span><span class="nm">${esc(album.name)}</span>`;
+    btn.addEventListener('click', () => moveCurrentTo(album));
     wrap.appendChild(btn);
   });
   const add = document.createElement('button');
-  add.className = 'album-tab add';
-  add.textContent = '+ Album';
+  add.className = 'sb-album add';
+  add.innerHTML = '<span class="dl">＋</span><span class="nm">Album baru</span>';
   add.addEventListener('click', async () => {
     const album = await promptNewAlbum();
-    if (album && inbox().length) sortIntoAlbum(album);
+    if (album) moveCurrentTo(album);
   });
   wrap.appendChild(add);
 }
@@ -175,49 +347,62 @@ async function promptNewAlbum() {
   if (!name) return null;
   const existing = state.albums.find((a) => a.name.toLowerCase() === name.toLowerCase());
   if (existing) return existing;
-  const album = { id: uid(), name, createdAt: Date.now() };
-  await db.putAlbum(album);
-  state.albums.push(album);
-  return album;
+  const record = { id: uid(), name, createdAt: Date.now() };
+  await db.putAlbum(record);
+  state.customAlbums.push(record);
+  return { name, id: record.id, count: 0, custom: true };
 }
 
-function currentPhoto() {
-  return inbox()[state.cursor] || null;
-}
-
-async function sortIntoAlbum(album) {
-  const photo = currentPhoto();
-  if (!photo) return;
-  flashTab(album.id);
-  await applyAction(photo, { status: 'kept', albumId: album.id });
-  toast(`📁 Masuk ke “${album.name}”`);
-  renderSort();
-}
-
-function flashTab(albumId) {
-  const idx = state.albums.findIndex((a) => a.id === albumId);
-  const tab = $('#album-tabs').children[idx];
-  if (tab) {
-    tab.classList.add('flash');
-    setTimeout(() => tab.classList.remove('flash'), 350);
+// ---------- Aksi sortir ----------
+async function advanceAfterAction() {
+  if (state.cursor < state.photos.length - 1) {
+    state.cursor++;
+    renderSort();
+  } else {
+    renderSort();
+    showSummary();
   }
 }
 
-async function trashCurrent() {
+async function actKeep(animate) {
   const photo = currentPhoto();
   if (!photo) return;
-  await animateCardOut(0, -window.innerHeight);
-  await applyAction(photo, { status: 'trash' });
-  toast('🗑️ Dibuang ke Trash');
-  renderSort();
+  if (animate) await animateCardOut(-window.innerWidth, 0);
+  if (state.mode === 'web') {
+    await webApply(photo.key, 'kept', null);
+    state.undoStack.push({ photoKey: photo.key, prev: null, cursor: state.cursor, webPrev: true });
+  } else {
+    await setDecision(photo, { action: 'keep' });
+  }
+  advanceAfterAction();
 }
 
-async function keepCurrent() {
+async function actTrash(animate) {
   const photo = currentPhoto();
   if (!photo) return;
-  await animateCardOut(-window.innerWidth, 0);
-  await applyAction(photo, { status: 'kept' });
-  renderSort();
+  if (animate) await animateCardOut(0, -window.innerHeight);
+  await setDecision(photo, { action: 'trash' });
+  if (state.mode === 'web') await webApply(photo.key, 'trash', null);
+  toast('🗑 Ditandai untuk dibuang', 'URUNGKAN', undo);
+  advanceAfterAction();
+}
+
+async function moveCurrentTo(album) {
+  const photo = currentPhoto();
+  if (!photo) return;
+  await setDecision(photo, { action: 'move', album: album.name, albumId: album.id || null });
+  if (state.mode === 'web') await webApply(photo.key, 'kept', album.id);
+  toast(`📁 → “${album.name}”`, 'URUNGKAN', undo);
+  advanceAfterAction();
+}
+
+// Mode web: keputusan langsung diterapkan ke record foto
+async function webApply(photoKey, status, albumId) {
+  const rec = state.webPhotos.find((p) => p.id === photoKey);
+  if (!rec) return;
+  rec.status = status;
+  rec.albumId = albumId;
+  await db.putPhoto(rec);
 }
 
 function goPrev() {
@@ -228,29 +413,101 @@ function goPrev() {
 }
 
 function goNext() {
-  if (state.cursor < inbox().length - 1) {
+  if (state.cursor < state.photos.length - 1) {
     state.cursor++;
     renderSort();
   }
 }
 
+// ---------- Ringkasan bulan ----------
+function showSummary() {
+  const monthKey = state.month.key;
+  let keep = 0;
+  let trash = 0;
+  let move = 0;
+  for (const d of state.decisions.values()) {
+    if (d.monthKey !== monthKey) continue;
+    if (d.action === 'keep') keep++;
+    else if (d.action === 'trash') trash++;
+    else if (d.action === 'move') move++;
+  }
+  if (state.mode === 'web') {
+    for (const p of state.webPhotos) {
+      if (monthKeyOf(p.takenAt || p.addedAt) !== monthKey || state.decisions.has(p.id)) continue;
+      if (p.status === 'trash') trash++;
+      else if (p.status === 'kept' && p.albumId) move++;
+      else if (p.status === 'kept') keep++;
+    }
+  }
+  $('#summary-body').innerHTML =
+    `<b>${esc(state.month.label)}</b> sudah ditinjau semua.<br/>` +
+    `✓ Disimpan: <b>${keep}</b> &nbsp;·&nbsp; 📁 Dipindahkan: <b>${move}</b> &nbsp;·&nbsp; 🗑 Dibuang: <b>${trash}</b>`;
+  $('#btn-summary-apply').classList.toggle('hidden', !(state.mode === 'native' && move > 0));
+  $('#btn-summary-trash').classList.toggle('hidden', trash === 0);
+  $('#summary-overlay').classList.remove('hidden');
+}
+
+// ---------- Komit (mode native) ----------
+function applyMoves() {
+  if (state.committing) return;
+  const moves = pendingMoves();
+  if (!moves.length) return;
+  state.committing = true;
+  toast('📁 Meminta izin sistem…');
+  native.commitMoves(JSON.stringify(moves.map((d) => ({ id: d.key, album: d.album }))));
+}
+
+function emptyTrashNative() {
+  if (state.committing) return;
+  const items = trashKeys();
+  if (!items.length) return;
+  state.committing = true;
+  toast('🗑 Meminta izin sistem…');
+  native.commitDeletes(JSON.stringify(items.map((d) => d.key)));
+}
+
+window.addEventListener('ng-moves-done', async (e) => {
+  state.committing = false;
+  const { ok, moved = [], failed = 0 } = e.detail || {};
+  if (!ok) {
+    toast('Perpindahan dibatalkan');
+    return;
+  }
+  await db.deleteDecisions(moved.map(String));
+  moved.forEach((id) => state.decisions.delete(String(id)));
+  toast(failed ? `📁 ${moved.length} dipindahkan, ${failed} gagal` : `📁 ${moved.length} foto dipindahkan`);
+  renderOrganize();
+});
+
+window.addEventListener('ng-deletes-done', async (e) => {
+  state.committing = false;
+  const { ok, deleted = [] } = e.detail || {};
+  if (!ok) {
+    toast('Penghapusan dibatalkan');
+    return;
+  }
+  await db.deleteDecisions(deleted.map(String));
+  deleted.forEach((id) => state.decisions.delete(String(id)));
+  toast(`🧹 ${deleted.length} foto dihapus dari galeri`);
+  renderTrash();
+  updateBadges();
+});
+
+window.addEventListener('ng-permission', (e) => {
+  state.permission = !!(e.detail && e.detail.granted);
+  if (!state.permission) toast('Izin galeri ditolak');
+  renderOrganize();
+});
+
 // ---------- Kartu & gesture ----------
 function renderCardStack() {
   const stack = $('#card-stack');
   stack.innerHTML = '';
-  const queue = inbox();
-  const empty = queue.length === 0;
-  $('#empty-state').classList.toggle('hidden', !empty);
-  stack.classList.toggle('hidden', empty);
-  if (empty) return;
-
-  const current = queue[state.cursor];
-  const next = queue[state.cursor + 1] || queue[state.cursor - 1];
-
-  if (next && next !== current) {
-    stack.appendChild(buildCard(next, true));
-  }
-  const topCard = buildCard(current, false);
+  const photo = currentPhoto();
+  if (!photo) return;
+  const next = state.photos[state.cursor + 1];
+  if (next) stack.appendChild(buildCard(next, true));
+  const topCard = buildCard(photo, false);
   stack.appendChild(topCard);
   attachGestures(topCard);
 }
@@ -259,13 +516,10 @@ function buildCard(photo, isUnder) {
   const card = document.createElement('div');
   card.className = 'photo-card' + (isUnder ? ' under' : '');
   const img = document.createElement('img');
-  img.src = photoURL(photo);
-  img.alt = photo.name;
+  img.src = photoUrl(photo, 1080);
+  img.alt = photo.name || '';
   img.draggable = false;
-  const label = document.createElement('div');
-  label.className = 'card-label';
-  label.textContent = photo.name;
-  card.append(img, label);
+  card.appendChild(img);
   return card;
 }
 
@@ -324,34 +578,21 @@ function attachGestures(card) {
 
     const isVertical = Math.abs(dy) > Math.abs(dx);
     if (isVertical && dy < -SWIPE_THRESHOLD) {
-      const photo = currentPhoto();
-      await animateCardOut(dx, -window.innerHeight);
-      if (photo) {
-        await applyAction(photo, { status: 'trash' });
-        toast('🗑️ Dibuang ke Trash');
-      }
-      renderSort();
+      actTrash(true);
       return;
     }
     if (!isVertical && dx < -SWIPE_THRESHOLD) {
-      const photo = currentPhoto();
-      await animateCardOut(-window.innerWidth, dy);
-      if (photo) await applyAction(photo, { status: 'kept' });
-      renderSort();
+      actKeep(true);
       return;
     }
     if (!isVertical && dx > SWIPE_THRESHOLD) {
-      if (state.cursor > 0) {
-        goPrev();
-      } else {
-        springBack(card);
-      }
+      if (state.cursor > 0) goPrev();
+      else springBack(card);
       return;
     }
-    // Ketukan tanpa geser = pratinjau ukuran penuh
     if (!moved) {
       const photo = currentPhoto();
-      if (photo) openLightbox(photoURL(photo));
+      if (photo) openLightbox(photoUrl(photo));
     }
     springBack(card);
   };
@@ -366,32 +607,60 @@ function springBack(card) {
   setTimeout(() => card.classList.remove('animating'), 280);
 }
 
+// ---------- Sheet bulan ----------
+function openMonthSheet() {
+  const list = $('#month-sheet-list');
+  list.innerHTML = '';
+  state.months.forEach((m, i) => {
+    const btn = document.createElement('button');
+    btn.className = `sheet-month mc-${i % 6}`;
+    btn.innerHTML = `<span>${esc(m.label)}</span><span>${m.count}</span>`;
+    btn.addEventListener('click', () => {
+      $('#month-sheet').classList.add('hidden');
+      openMonth(m);
+    });
+    list.appendChild(btn);
+  });
+  $('#month-sheet').classList.remove('hidden');
+}
+
 // ---------- Trash ----------
+function trashEntries() {
+  const entries = trashKeys().map((d) => ({ key: d.key, name: d.name }));
+  if (state.mode === 'web') {
+    for (const p of state.webPhotos) {
+      if (p.status === 'trash' && !state.decisions.has(p.id)) entries.push({ key: p.id, name: p.name });
+    }
+  }
+  return entries;
+}
+
 function renderTrash() {
   const grid = $('#trash-grid');
   grid.innerHTML = '';
-  const items = trashed();
+  const items = trashEntries();
   $('#trash-count').textContent = items.length;
   $('#trash-empty-msg').classList.toggle('hidden', items.length > 0);
+  $('#trash-hint').classList.toggle('hidden', items.length === 0);
   $('#btn-empty-trash').disabled = items.length === 0;
 
-  items.forEach((photo) => {
+  items.forEach((item) => {
     const cell = document.createElement('div');
     cell.className = 'grid-item';
     const img = document.createElement('img');
-    img.src = photoURL(photo);
-    img.alt = photo.name;
+    img.src = photoUrl({ key: item.key }, 400);
+    img.alt = item.name || '';
     img.loading = 'lazy';
-    img.addEventListener('click', () => openLightbox(photoURL(photo)));
+    img.addEventListener('click', () => openLightbox(photoUrl({ key: item.key })));
     const restore = document.createElement('button');
     restore.className = 'grid-action';
     restore.title = 'Kembalikan';
-    restore.textContent = '↩️';
+    restore.textContent = '↩';
     restore.addEventListener('click', async (e) => {
       e.stopPropagation();
-      photo.status = 'inbox';
-      photo.albumId = null;
-      await db.putPhoto(photo);
+      state.decisions.delete(item.key);
+      await db.deleteDecision(item.key);
+      if (state.mode === 'web') await webApply(item.key, 'inbox', null);
       toast('↩️ Foto dikembalikan');
       renderTrash();
       updateBadges();
@@ -403,112 +672,88 @@ function renderTrash() {
 }
 
 async function emptyTrash() {
-  const items = trashed();
+  const items = trashEntries();
   if (!items.length) return;
-  const ok = confirm(`Hapus permanen ${items.length} foto dari Trash? Tindakan ini tidak bisa diurungkan.`);
+  if (state.mode === 'native') {
+    emptyTrashNative(); // dialog konfirmasi ditampilkan oleh sistem Android
+    return;
+  }
+  const ok = confirm(`Hapus permanen ${items.length} foto? Tindakan ini tidak bisa diurungkan.`);
   if (!ok) return;
-  const ids = items.map((p) => p.id);
+  const ids = items.map((i) => i.key);
   await db.deletePhotos(ids);
-  ids.forEach(revokeURL);
-  state.photos = state.photos.filter((p) => !ids.includes(p.id));
-  state.undoStack = state.undoStack.filter((u) => !ids.includes(u.photoId));
+  await db.deleteDecisions(ids);
+  ids.forEach((id) => {
+    state.decisions.delete(id);
+    const url = urlCache.get(id);
+    if (url) {
+      URL.revokeObjectURL(url);
+      urlCache.delete(id);
+    }
+  });
+  state.webPhotos = state.webPhotos.filter((p) => !ids.includes(p.id));
   toast(`🧹 ${ids.length} foto dihapus permanen`);
   renderTrash();
 }
 
 // ---------- Album ----------
-function renderAlbumList() {
+async function renderAlbumList() {
+  await loadAlbums();
   const wrap = $('#album-list');
   wrap.innerHTML = '';
-
-  const rows = [
-    { id: null, name: 'Tersimpan (tanpa album)', icon: '✅', photos: albumPhotos(null) },
-    ...state.albums.map((a) => ({ id: a.id, name: a.name, icon: '📁', photos: albumPhotos(a.id) })),
-  ];
-
-  rows.forEach((row) => {
+  if (!state.albums.length) {
+    wrap.innerHTML = '<p class="muted center">Belum ada album.</p>';
+    return;
+  }
+  state.albums.forEach((album) => {
     const el = document.createElement('div');
     el.className = 'album-row';
     const cover = document.createElement('div');
     cover.className = 'album-cover';
-    if (row.photos.length) {
+    if (state.mode === 'native' && album.coverId) {
       const img = document.createElement('img');
-      img.src = photoURL(row.photos[row.photos.length - 1]);
+      img.src = `/media/${album.coverId}?w=200`;
       img.alt = '';
       cover.appendChild(img);
     } else {
-      cover.textContent = row.icon;
+      cover.textContent = '📁';
     }
     const info = document.createElement('div');
     info.className = 'album-info';
-    info.innerHTML = `<div class="name">${escapeHTML(row.name)}</div><div class="meta">${row.photos.length} foto</div>`;
+    info.innerHTML = `<div class="name">${esc(album.name)}</div><div class="meta">${album.count} foto</div>`;
     el.append(cover, info);
-    el.addEventListener('click', () => openAlbumDetail(row.id, row.name));
+    el.addEventListener('click', () => openAlbumDetail(album));
     wrap.appendChild(el);
   });
 }
 
-function escapeHTML(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
-
-function openAlbumDetail(albumId, name) {
-  state.currentAlbumId = albumId;
-  $('#album-detail-name').textContent = albumId === null ? '✅ Tersimpan' : `📁 ${name}`;
-  $('#btn-delete-album').classList.toggle('hidden', albumId === null);
-  renderAlbumDetail();
-  $$('.screen').forEach((s) => s.classList.remove('active'));
-  $('#screen-album-detail').classList.add('active');
-}
-
-function renderAlbumDetail() {
+function openAlbumDetail(album) {
+  state.currentAlbumName = album.name;
+  $('#album-detail-name').textContent = `📁 ${album.name}`;
   const grid = $('#album-detail-grid');
   grid.innerHTML = '';
-  const items = albumPhotos(state.currentAlbumId);
+  let items = [];
+  if (state.mode === 'native') {
+    items = JSON.parse(native.listAlbumPhotos(album.name)).map((p) => ({ key: String(p.id), name: p.name }));
+  } else {
+    items = state.webPhotos
+      .filter((p) => p.status === 'kept' && p.albumId === album.id)
+      .map((p) => ({ key: p.id, name: p.name }));
+  }
   $('#album-empty-msg').classList.toggle('hidden', items.length > 0);
-
-  items.forEach((photo) => {
+  items.forEach((item) => {
     const cell = document.createElement('div');
     cell.className = 'grid-item';
     const img = document.createElement('img');
-    img.src = photoURL(photo);
-    img.alt = photo.name;
+    img.src = photoUrl({ key: item.key }, 400);
+    img.alt = item.name || '';
     img.loading = 'lazy';
-    img.addEventListener('click', () => openLightbox(photoURL(photo)));
-    const remove = document.createElement('button');
-    remove.className = 'grid-action';
-    remove.title = 'Kembalikan ke antrean sortir';
-    remove.textContent = '↩️';
-    remove.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      photo.status = 'inbox';
-      photo.albumId = null;
-      await db.putPhoto(photo);
-      toast('↩️ Dikembalikan ke antrean');
-      renderAlbumDetail();
-      updateBadges();
-    });
-    cell.append(img, remove);
+    img.addEventListener('click', () => openLightbox(photoUrl({ key: item.key })));
+    cell.appendChild(img);
     grid.appendChild(cell);
   });
-}
-
-async function deleteCurrentAlbum() {
-  const album = findAlbum(state.currentAlbumId);
-  if (!album) return;
-  const members = albumPhotos(album.id);
-  const ok = confirm(`Hapus album “${album.name}”? ${members.length} foto di dalamnya tetap tersimpan (tanpa album).`);
-  if (!ok) return;
-  for (const photo of members) {
-    photo.albumId = null;
-    await db.putPhoto(photo);
-  }
-  await db.deleteAlbum(album.id);
-  state.albums = state.albums.filter((a) => a.id !== album.id);
-  toast(`🗑️ Album “${album.name}” dihapus`);
-  showScreen('albums');
+  $$('.screen').forEach((s) => s.classList.remove('active'));
+  $('#screen-album-detail').classList.add('active');
 }
 
 // ---------- Lightbox ----------
@@ -524,7 +769,7 @@ function closeLightbox() {
 
 // ---------- Lencana ----------
 function updateBadges() {
-  const n = trashed().length;
+  const n = trashEntries().length;
   const badge = $('#nav-trash-badge');
   badge.textContent = n;
   badge.classList.toggle('hidden', n === 0);
@@ -534,75 +779,102 @@ function updateBadges() {
 function bindEvents() {
   const fileInput = $('#file-input');
   $('#btn-import').addEventListener('click', () => fileInput.click());
-  $('#btn-empty-import').addEventListener('click', () => fileInput.click());
+  $('#btn-import-more').addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', () => {
     importFiles(fileInput.files);
     fileInput.value = '';
   });
 
-  $('#btn-resume').addEventListener('click', () => showScreen('sort'));
-  $('#btn-back-home').addEventListener('click', () => showScreen('home'));
+  $('#btn-grant').addEventListener('click', () => native && native.requestPermission());
+  $('#btn-apply-moves').addEventListener('click', applyMoves);
 
-  $('#btn-trash').addEventListener('click', trashCurrent);
-  $('#btn-keep').addEventListener('click', keepCurrent);
-  $('#btn-prev').addEventListener('click', goPrev);
-  $('#btn-next').addEventListener('click', goNext);
-  $('#btn-undo').addEventListener('click', undo);
+  $('#btn-close-sort').addEventListener('click', () => showScreen('organize'));
+  $('#btn-month-pill').addEventListener('click', openMonthSheet);
+  $('#btn-open-trash').addEventListener('click', () => showScreen('trash'));
+
+  $('#btn-keep').addEventListener('click', () => actKeep(true));
+  $('#btn-trash').addEventListener('click', () => actTrash(true));
+  $('#btn-help').addEventListener('click', () => $('#help-overlay').classList.remove('hidden'));
+  $('#btn-help-close').addEventListener('click', () => $('#help-overlay').classList.add('hidden'));
+  $('#btn-share').addEventListener('click', () => {
+    const photo = currentPhoto();
+    if (!photo) return;
+    if (state.mode === 'native') native.share(photo.key);
+    else toast('Bagikan hanya tersedia di aplikasi Android');
+  });
 
   $('#btn-empty-trash').addEventListener('click', emptyTrash);
   $('#btn-new-album').addEventListener('click', async () => {
     await promptNewAlbum();
     renderAlbumList();
   });
-  $('#btn-delete-album').addEventListener('click', deleteCurrentAlbum);
+
+  $('#btn-summary-close').addEventListener('click', () => {
+    $('#summary-overlay').classList.add('hidden');
+    showScreen('organize');
+  });
+  $('#btn-summary-apply').addEventListener('click', () => {
+    $('#summary-overlay').classList.add('hidden');
+    applyMoves();
+    showScreen('organize');
+  });
+  $('#btn-summary-trash').addEventListener('click', () => {
+    $('#summary-overlay').classList.add('hidden');
+    showScreen('trash');
+  });
+
+  $('#month-sheet').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) $('#month-sheet').classList.add('hidden');
+  });
+  $('#summary-overlay').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) $('#summary-overlay').classList.add('hidden');
+  });
+  $('#help-overlay').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) $('#help-overlay').classList.add('hidden');
+  });
 
   $$('.btn-back').forEach((b) =>
     b.addEventListener('click', () => {
       const parent = b.closest('.screen');
-      showScreen(parent.id === 'screen-album-detail' ? 'albums' : 'sort');
+      showScreen(parent.id === 'screen-album-detail' ? 'albums' : 'organize');
     })
   );
-
-  $$('.nav-btn').forEach((b) => b.addEventListener('click', () => showScreen(b.dataset.nav)));
+  $$('[data-nav]').forEach((b) => b.addEventListener('click', () => showScreen(b.dataset.nav)));
 
   $('#lightbox-close').addEventListener('click', closeLightbox);
   $('#lightbox').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) closeLightbox();
   });
 
-  // Tarik & letakkan
-  document.body.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    document.body.classList.add('dragover');
-  });
-  document.body.addEventListener('dragleave', () => document.body.classList.remove('dragover'));
+  // Tarik & letakkan (mode web)
+  document.body.addEventListener('dragover', (e) => e.preventDefault());
   document.body.addEventListener('drop', (e) => {
     e.preventDefault();
-    document.body.classList.remove('dragover');
-    if (e.dataTransfer?.files?.length) importFiles(e.dataTransfer.files);
+    if (state.mode === 'web' && e.dataTransfer?.files?.length) importFiles(e.dataTransfer.files);
   });
 
   // Pintasan keyboard
   document.addEventListener('keydown', (e) => {
-    if (!$('#screen-sort').classList.contains('active')) {
-      if (e.key === 'Escape') closeLightbox();
+    if (e.key === 'Escape') {
+      closeLightbox();
+      $('#month-sheet').classList.add('hidden');
+      $('#help-overlay').classList.add('hidden');
       return;
     }
-    if (e.key === 'Escape') return closeLightbox();
+    if (!$('#screen-sort').classList.contains('active')) return;
     if (e.target instanceof HTMLInputElement) return;
     switch (e.key) {
       case 'ArrowLeft': goPrev(); break;
       case 'ArrowRight': goNext(); break;
       case 'ArrowUp':
       case 'Delete':
-      case 'Backspace': trashCurrent(); break;
-      case ' ': e.preventDefault(); keepCurrent(); break;
+      case 'Backspace': actTrash(true); break;
+      case ' ': e.preventDefault(); actKeep(true); break;
       case 'z':
       case 'Z': undo(); break;
       default: {
-        // Angka 1-9 = sortir ke album ke-n
         const n = parseInt(e.key, 10);
-        if (n >= 1 && n <= state.albums.length) sortIntoAlbum(state.albums[n - 1]);
+        if (n >= 1 && n <= state.albums.length) moveCurrentTo(state.albums[n - 1]);
       }
     }
   });
@@ -612,18 +884,26 @@ function bindEvents() {
 async function init() {
   bindEvents();
   try {
-    const [photos, albums] = await Promise.all([db.getAllPhotos(), db.getAllAlbums()]);
-    state.photos = photos.sort((a, b) => a.addedAt - b.addedAt);
-    state.albums = albums.sort((a, b) => a.createdAt - b.createdAt);
+    const [albums, decisions, photos] = await Promise.all([
+      db.getAllAlbums(),
+      db.getAllDecisions(),
+      state.mode === 'web' ? db.getAllPhotos() : Promise.resolve([]),
+    ]);
+    state.customAlbums = albums.sort((a, b) => a.createdAt - b.createdAt);
+    decisions.forEach((d) => state.decisions.set(d.key, d));
+    state.webPhotos = photos.sort((a, b) => (a.takenAt || a.addedAt) - (b.takenAt || b.addedAt));
   } catch (err) {
     console.error('Gagal memuat basis data', err);
     toast('⚠️ Gagal memuat data tersimpan');
   }
-  updateBadges();
-  showScreen('home');
 
-  // Lewati service worker saat berjalan di dalam WebView Android
-  // (aset sudah lokal, origin appassets.androidx.dev dilayani dari APK)
+  if (state.mode === 'native') {
+    state.permission = native.hasPermission();
+    if (!state.permission) native.requestPermission();
+  }
+
+  showScreen('organize');
+
   const inAndroidShell = location.hostname === 'appassets.androidx.dev';
   if ('serviceWorker' in navigator && location.protocol === 'https:' && !inAndroidShell) {
     navigator.serviceWorker.register('sw.js').catch(() => {});

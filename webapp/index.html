@@ -3,78 +3,95 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
-  <meta name="theme-color" content="#101014" />
+  <meta name="theme-color" content="#000000" />
   <title>SwipeSort — Rapikan Galeri Fotomu</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="css/app.css" />
 </head>
 <body>
-  <!-- ============ Layar Impor / Beranda ============ -->
-  <section id="screen-home" class="screen active">
-    <div class="home-hero">
-      <div class="home-logo">🗂️</div>
-      <h1>SwipeSort</h1>
-      <p class="tagline">Rapikan galeri fotomu dengan sekali usap.<br/>
-        Geser ke atas untuk buang, ketuk album untuk menyortir.</p>
+  <!-- ============ Layar Susun (daftar bulan) ============ -->
+  <section id="screen-organize" class="screen active">
+    <div class="org-scroll">
+      <h1 class="org-title">Susun</h1>
 
-      <button id="btn-import" class="btn btn-primary btn-lg">📥 Impor Foto</button>
-      <input type="file" id="file-input" accept="image/*" multiple hidden />
-
-      <div id="home-stats" class="home-stats hidden">
-        <button id="btn-resume" class="btn btn-secondary btn-lg">▶️ Lanjut Menyortir</button>
-        <div class="stat-row">
-          <div class="stat"><span id="stat-total">0</span><label>Foto</label></div>
-          <div class="stat"><span id="stat-sorted">0</span><label>Tersortir</label></div>
-          <div class="stat"><span id="stat-trash">0</span><label>Di Trash</label></div>
-        </div>
+      <div class="org-chips">
+        <button class="chip active" data-nav="organize">Kamera</button>
+        <button class="chip" data-nav="albums">Album</button>
+        <button class="chip" data-nav="trash">Trash</button>
       </div>
 
-      <div class="drop-hint">…atau tarik &amp; letakkan foto ke sini</div>
+      <!-- Gerbang izin (mode Android, belum diizinkan) -->
+      <div id="perm-gate" class="gate hidden">
+        <div class="gate-icon">🖼️</div>
+        <p>SwipeSort butuh akses galeri untuk menampilkan foto-fotomu per bulan.</p>
+        <button id="btn-grant" class="btn btn-primary btn-lg">Izinkan Akses Galeri</button>
+      </div>
+
+      <!-- Gerbang impor (mode web, belum ada foto) -->
+      <div id="import-gate" class="gate hidden">
+        <div class="gate-icon">📥</div>
+        <p>Impor foto untuk mulai menyortir.<br/>Foto akan dikelompokkan per bulan otomatis.</p>
+        <button id="btn-import" class="btn btn-primary btn-lg">Impor Foto</button>
+      </div>
+      <input type="file" id="file-input" accept="image/*" multiple hidden />
+
+      <!-- Banner perpindahan menunggu (mode Android) -->
+      <div id="pending-banner" class="pending-banner hidden">
+        <span id="pending-text">0 foto menunggu dipindahkan</span>
+        <button id="btn-apply-moves" class="btn btn-primary btn-sm">TERAPKAN</button>
+      </div>
+
+      <div id="month-section" class="hidden">
+        <h2 class="section-label">Berdasarkan Bulan</h2>
+        <div id="month-list" class="month-list"></div>
+      </div>
+
+      <div id="web-import-more" class="center hidden">
+        <button id="btn-import-more" class="btn btn-secondary btn-sm">+ Impor foto lagi</button>
+      </div>
     </div>
   </section>
 
-  <!-- ============ Layar Sortir (utama) ============ -->
-  <section id="screen-sort" class="screen">
-    <header class="sort-header">
-      <button id="btn-back-home" class="icon-btn" title="Beranda">🏠</button>
-      <div class="progress-wrap">
-        <div class="progress-text"><span id="progress-current">0</span> / <span id="progress-total">0</span></div>
-        <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
-      </div>
-      <button id="btn-undo" class="icon-btn" title="Urungkan (Z)" disabled>↩️</button>
+  <!-- ============ Layar Sortir (ala Slidebox) ============ -->
+  <section id="screen-sort" class="screen sort-screen">
+    <header class="sb-top">
+      <button id="btn-close-sort" class="sb-icon">✕</button>
+      <button id="btn-month-pill" class="sb-month-pill"><span id="sort-month-label">—</span><span class="caret">▾</span></button>
+      <button id="btn-open-trash" class="sb-icon">🗑</button>
     </header>
 
-    <div id="album-tabs" class="album-tabs">
-      <!-- tab album dirender oleh JS; tombol + selalu di akhir -->
+    <div class="sb-progress">
+      <span id="sp-pos">0</span>&nbsp;/&nbsp;<span id="sp-total">0</span><span id="sp-date-wrap">&nbsp;·&nbsp;<span id="sp-date"></span></span>
     </div>
 
     <main id="card-stage" class="card-stage">
-      <div id="swipe-hint-up" class="swipe-hint hint-up">🗑️ Buang</div>
+      <div id="swipe-hint-up" class="swipe-hint hint-up">🗑 BUANG</div>
       <div id="card-stack" class="card-stack"></div>
-      <div id="empty-state" class="empty-state hidden">
-        <div class="empty-icon">🎉</div>
-        <h2>Semua beres!</h2>
-        <p>Tidak ada foto lagi yang perlu disortir.</p>
-        <button id="btn-empty-import" class="btn btn-primary">Impor Foto Lagi</button>
-      </div>
+      <div id="decision-badge" class="decision-badge hidden"></div>
     </main>
 
-    <footer class="sort-footer">
-      <button id="btn-prev" class="icon-btn big" title="Sebelumnya (←)">⬅️</button>
-      <button id="btn-trash" class="icon-btn big danger" title="Buang (↑ / Del)">🗑️</button>
-      <button id="btn-keep" class="icon-btn big success" title="Simpan &amp; lanjut (Spasi)">✅</button>
-      <button id="btn-next" class="icon-btn big" title="Berikutnya (→)">➡️</button>
+    <div class="sb-actions">
+      <button id="btn-keep" class="sb-act next"><span class="mark">✓</span> LANJUT</button>
+      <button id="btn-help" class="sb-round">?</button>
+      <button id="btn-share" class="sb-round">⇪</button>
+      <button id="btn-trash" class="sb-act trash"><span class="mark">✕</span> BUANG</button>
+    </div>
+
+    <footer class="sb-move">
+      <div class="sb-move-label">PINDAHKAN KE ALBUM…</div>
+      <div id="album-tabs" class="sb-album-row"></div>
     </footer>
   </section>
 
   <!-- ============ Layar Trash ============ -->
   <section id="screen-trash" class="screen">
     <header class="list-header">
-      <button class="icon-btn btn-back" title="Kembali">←</button>
+      <button class="sb-icon btn-back" title="Kembali">←</button>
       <h2>🗑️ Trash <span id="trash-count" class="count-badge">0</span></h2>
-      <button id="btn-empty-trash" class="btn btn-danger btn-sm">Kosongkan</button>
+      <button id="btn-empty-trash" class="btn btn-danger btn-sm">Hapus</button>
     </header>
+    <p class="muted hint-line" id="trash-hint">Foto di sini belum terhapus. Ketuk “Hapus” untuk menghapus permanen.</p>
     <div id="trash-grid" class="photo-grid"></div>
     <p id="trash-empty-msg" class="muted center hidden">Trash kosong. Bersih! ✨</p>
   </section>
@@ -82,7 +99,7 @@
   <!-- ============ Layar Album ============ -->
   <section id="screen-albums" class="screen">
     <header class="list-header">
-      <button class="icon-btn btn-back" title="Kembali">←</button>
+      <button class="sb-icon btn-back" title="Kembali">←</button>
       <h2>📚 Album</h2>
       <button id="btn-new-album" class="btn btn-secondary btn-sm">+ Baru</button>
     </header>
@@ -92,9 +109,9 @@
   <!-- ============ Layar Isi Album ============ -->
   <section id="screen-album-detail" class="screen">
     <header class="list-header">
-      <button class="icon-btn btn-back" title="Kembali">←</button>
+      <button class="sb-icon btn-back" title="Kembali">←</button>
       <h2 id="album-detail-name">Album</h2>
-      <button id="btn-delete-album" class="btn btn-danger btn-sm">Hapus Album</button>
+      <span></span>
     </header>
     <div id="album-detail-grid" class="photo-grid"></div>
     <p id="album-empty-msg" class="muted center hidden">Album ini masih kosong.</p>
@@ -102,15 +119,54 @@
 
   <!-- ============ Navigasi bawah ============ -->
   <nav class="bottom-nav">
-    <button data-nav="sort" class="nav-btn active">🃏<span>Sortir</span></button>
-    <button data-nav="albums" class="nav-btn">📚<span>Album</span></button>
-    <button data-nav="trash" class="nav-btn">🗑️<span>Trash</span><em id="nav-trash-badge" class="badge hidden">0</em></button>
+    <button data-nav="organize" class="nav-btn active"><span class="nav-ic">🗂</span><span>Susun</span></button>
+    <button data-nav="albums" class="nav-btn"><span class="nav-ic">📚</span><span>Album</span></button>
+    <button data-nav="trash" class="nav-btn"><span class="nav-ic">🗑</span><span>Trash</span><em id="nav-trash-badge" class="badge hidden">0</em></button>
   </nav>
+
+  <!-- ============ Sheet pemilih bulan ============ -->
+  <div id="month-sheet" class="sheet-backdrop hidden">
+    <div class="sheet">
+      <div class="sheet-title">Pilih Bulan</div>
+      <div id="month-sheet-list" class="sheet-list"></div>
+    </div>
+  </div>
+
+  <!-- ============ Overlay ringkasan bulan selesai ============ -->
+  <div id="summary-overlay" class="sheet-backdrop hidden">
+    <div class="sheet">
+      <div class="sheet-title">🎉 Bulan selesai!</div>
+      <div id="summary-body" class="summary-body"></div>
+      <div class="sheet-actions">
+        <button id="btn-summary-apply" class="btn btn-primary hidden">Terapkan Perpindahan</button>
+        <button id="btn-summary-trash" class="btn btn-danger hidden">Tinjau Trash</button>
+        <button id="btn-summary-close" class="btn btn-secondary">Kembali ke Bulan</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Overlay bantuan ============ -->
+  <div id="help-overlay" class="sheet-backdrop hidden">
+    <div class="sheet">
+      <div class="sheet-title">Cara pakai</div>
+      <div class="help-body">
+        <p>👆 <b>Geser ke atas</b> — buang foto ke Trash</p>
+        <p>👈 <b>Geser ke kiri</b> / tombol ✓ — simpan &amp; lanjut</p>
+        <p>👉 <b>Geser ke kanan</b> — foto sebelumnya</p>
+        <p>📁 <b>Ketuk album</b> di bawah — pindahkan foto ke album itu</p>
+        <p>🔍 <b>Ketuk foto</b> — lihat ukuran penuh</p>
+        <p>🗑 Foto yang dibuang &amp; dipindahkan baru benar-benar diproses saat kamu menerapkannya — aman untuk dicoba-coba.</p>
+      </div>
+      <div class="sheet-actions">
+        <button id="btn-help-close" class="btn btn-secondary">Mengerti</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ============ Lightbox pratinjau ============ -->
   <div id="lightbox" class="lightbox hidden">
     <img id="lightbox-img" alt="Pratinjau foto" />
-    <button id="lightbox-close" class="icon-btn lightbox-close">✕</button>
+    <button id="lightbox-close" class="sb-icon lightbox-close">✕</button>
   </div>
 
   <div id="toast" class="toast hidden"></div>

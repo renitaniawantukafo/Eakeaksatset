@@ -4,18 +4,19 @@ Aplikasi web (PWA) untuk merapikan galeri foto dengan gesture swipe, terinspiras
 
 ## ✨ Fitur
 
-- **📥 Impor foto** — pilih banyak foto sekaligus lewat tombol impor atau tarik & letakkan (drag & drop).
-- **🃏 Sortir ala kartu** — foto tampil satu per satu seperti tumpukan kartu:
-  - **Swipe ke atas** → buang ke Trash 🗑️
-  - **Swipe ke kiri** → simpan & lanjut ✅
-  - **Swipe ke kanan** → kembali ke foto sebelumnya ⬅️
-  - **Ketuk foto** → pratinjau ukuran penuh 🔍
-- **📁 Sortir ke album** — ketuk tab album di atas untuk langsung memasukkan foto ke album; buat album baru kapan saja.
-- **🗑️ Trash aman** — foto yang dibuang masuk Trash dulu; tinjau, kembalikan, atau kosongkan permanen.
-- **↩️ Undo** — urungkan aksi sortir terakhir kapan pun.
-- **📊 Progres** — indikator jumlah foto yang sudah disortir.
-- **💾 Persisten** — semua foto, album, dan status tersimpan di IndexedDB browser; tutup tab dan lanjutkan nanti.
-- **📱 PWA** — bisa di-install ke home screen dan berjalan offline (butuh HTTPS).
+- **🗂 Alur ala Slidebox** — di Android, galeri dibaca otomatis dan dikelompokkan
+  **per bulan**; pilih bulan, lalu sortir foto satu per satu. Tidak perlu impor manual.
+- **🃏 Layar sortir** — foto tampil satu per satu:
+  - **Swipe ke atas / ✕ BUANG** → tandai buang 🗑️
+  - **Swipe ke kiri / ✓ LANJUT** → simpan & lanjut
+  - **Swipe ke kanan** → foto sebelumnya
+  - **PINDAHKAN KE ALBUM…** → ketuk album untuk memindahkan foto ke album galeri
+- **🗑️ Trash aman** — foto yang dibuang ditinjau dulu; penghapusan & perpindahan
+  sungguhan diterapkan sekaligus lewat **dialog konfirmasi sistem Android**
+  (sesuai aturan scoped storage Android 11+).
+- **↩️ Undo**, ringkasan per bulan, indikator progres `1 / 1018 · tanggal`.
+- **🌐 Mode web** — di browser (tanpa Android), foto diimpor manual dan tetap
+  dikelompokkan per bulan dari tanggal berkas; data tersimpan di IndexedDB.
 
 ## ⌨️ Pintasan keyboard
 

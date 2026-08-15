@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">SwipeSort</string>
     <string name="file_chooser_title">Pilih foto</string>
+    <string name="share_title">Bagikan foto</string>
 </resources>
