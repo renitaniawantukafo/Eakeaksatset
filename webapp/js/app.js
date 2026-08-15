@@ -27,9 +27,12 @@ const state = {
   currentAlbumName: null,
   committing: false,
   faces: new Map(), // photoKey -> {key, faces, scannedAt}
+  scans: [], // sesi pemindaian (record db.scans)
   scanning: false,
   scanTotal: 0,
   scanDone: 0,
+  scanSession: null, // sesi yang sedang berjalan
+  allIds: [], // [{id, taken}] dari galeri, terbaru dulu (mode native)
 };
 
 const urlCache = new Map();
@@ -215,9 +218,13 @@ async function renderOrganize() {
   if (isNative && state.permission) {
     const found = faceKeys().length;
     const scanned = state.faces.size;
-    $('#smart-faces-meta').textContent = scanned === 0
+    const paused = pausedSessions().length;
+    let meta = scanned === 0
       ? 'Ketuk untuk memindai wajah di seluruh galeri'
       : `${found} foto dengan orang · ${scanned} foto dipindai`;
+    if (state.scanning) meta = `🔍 Memindai… ${state.scanDone} / ${state.scanTotal}`;
+    else if (paused > 0) meta += ` · ⏸ ${paused} sesi tertunda`;
+    $('#smart-faces-meta').textContent = meta;
   }
 
   const list = $('#month-list');
@@ -518,66 +525,213 @@ window.addEventListener('ng-permission', (e) => {
 // ---------- Deteksi wajah ----------
 const faceKeys = () => [...state.faces.values()].filter((f) => f.faces > 0).map((f) => f.key);
 
-function unscannedIds() {
-  const all = JSON.parse(native.listAllIds());
-  return all.map(String).filter((id) => !state.faces.has(id));
+function refreshAllIds() {
+  state.allIds = JSON.parse(native.listAllIds())
+    .map((p) => ({ id: String(p.id), taken: p.taken || 0 }))
+    .sort((a, b) => b.taken - a.taken);
 }
 
+// Foto yang belum pernah dipindai — yang sudah ada di cache SELALU dilewati
+function unscannedIds() {
+  return state.allIds.filter((p) => !state.faces.has(p.id)).map((p) => p.id);
+}
+
+function takenOf(key) {
+  const p = state.allIds.find((x) => x.id === key);
+  return p ? p.taken : 0;
+}
+
+const pausedSessions = () => state.scans.filter((s) => s.status === 'paused');
+
 function renderFaces() {
+  if (state.mode === 'native' && state.permission && !state.scanning) refreshAllIds();
   const found = faceKeys();
   const scanned = state.faces.size;
   const pending = state.mode === 'native' && state.permission ? unscannedIds().length : 0;
+  const paused = pausedSessions();
 
   $('#faces-count').textContent = found.length;
-  $('#faces-intro').classList.toggle('hidden', state.scanning || scanned > 0);
+  $('#faces-intro').classList.toggle('hidden', state.scanning || scanned > 0 || paused.length > 0);
   $('#faces-progress').classList.toggle('hidden', !state.scanning);
-  $('#faces-empty-msg').classList.toggle('hidden', state.scanning || scanned === 0 || found.length > 0);
+  $('#faces-body').classList.toggle('hidden', state.scanning || (scanned === 0 && paused.length === 0));
+  $('#faces-empty-msg').classList.toggle('hidden', scanned === 0 || found.length > 0);
   $('#faces-footer').classList.toggle('hidden', state.scanning || found.length === 0);
   $('#btn-rescan').classList.toggle('hidden', state.scanning || scanned === 0);
-  $('#btn-rescan').textContent = pending > 0 ? `Pindai ${pending} foto baru` : 'Semua sudah dipindai';
+  $('#btn-rescan').textContent = pending > 0 ? `Pindai lagi (${pending} tersisa)` : 'Semua sudah dipindai';
   $('#btn-rescan').disabled = pending === 0;
-  $('#faces-scan-note').textContent = pending > 0 ? `${pending} foto akan dipindai` : '';
+  $('#faces-scan-note').textContent = pending > 0 ? `${pending} foto belum dipindai` : '';
+  $('#faces-stats').textContent = scanned > 0
+    ? `${scanned} foto sudah dipindai (otomatis dilewati) · ${pending} belum dipindai · ${found.length} berisi orang`
+    : '';
 
-  const grid = $('#faces-grid');
-  grid.innerHTML = '';
-  if (state.scanning) return;
-  // Terbaru dulu supaya grid terasa hidup
-  [...found].reverse().forEach((key) => {
-    const cell = document.createElement('div');
-    cell.className = 'grid-item';
-    const img = document.createElement('img');
-    img.src = photoUrl({ key }, 300);
-    img.alt = '';
-    img.loading = 'lazy';
-    img.addEventListener('click', () => openLightbox(photoUrl({ key })));
-    const mark = document.createElement('span');
-    mark.className = 'face-mark';
-    mark.textContent = `👤${state.faces.get(key).faces}`;
-    cell.append(img, mark);
-    grid.appendChild(cell);
+  renderScanSessions();
+  if (!state.scanning) renderFaceGroups(found);
+}
+
+function renderScanSessions() {
+  const paused = pausedSessions();
+  $('#faces-sessions-wrap').classList.toggle('hidden', paused.length === 0);
+  const wrap = $('#faces-sessions');
+  wrap.innerHTML = '';
+  paused.forEach((s) => {
+    const row = document.createElement('div');
+    row.className = 'scan-session';
+    const pct = Math.round((s.done / Math.max(1, s.target)) * 100);
+    const info = document.createElement('div');
+    info.className = 'info';
+    info.innerHTML =
+      `<div class="line1">Sesi ${esc(fmtDate(s.createdAt))}</div>` +
+      `<div class="line2">${s.done} / ${s.target} dipindai · 👤 ${s.found} ditemukan</div>` +
+      `<div class="mini-bar"><div class="mini-fill" style="width:${pct}%"></div></div>`;
+    const cont = document.createElement('button');
+    cont.className = 'btn btn-primary btn-sm';
+    cont.textContent = '▶ Lanjut';
+    cont.addEventListener('click', () => resumeSession(s));
+    const del = document.createElement('button');
+    del.className = 'sb-icon';
+    del.textContent = '✕';
+    del.title = 'Hapus sesi (hasil pindai tetap tersimpan)';
+    del.addEventListener('click', async () => {
+      await db.deleteScan(s.id);
+      state.scans = state.scans.filter((x) => x.id !== s.id);
+      renderFaces();
+    });
+    row.append(info, cont, del);
+    wrap.appendChild(row);
   });
 }
 
-function startFaceScan() {
+// Hasil dikelompokkan per bulan foto diambil, terbaru dulu
+function renderFaceGroups(found) {
+  const groups = new Map(); // monthKey -> [keys]
+  found.forEach((key) => {
+    const mk = monthKeyOf(takenOf(key) || Date.now());
+    if (!groups.has(mk)) groups.set(mk, []);
+    groups.get(mk).push(key);
+  });
+  const wrap = $('#faces-groups');
+  wrap.innerHTML = '';
+  [...groups.keys()].sort().reverse().forEach((mk) => {
+    const keys = groups.get(mk).sort((a, b) => takenOf(b) - takenOf(a));
+    const head = document.createElement('div');
+    head.className = 'month-head';
+    head.innerHTML = `<span>${esc(monthLabelOf(mk))}</span><span class="cnt">${keys.length} foto</span>`;
+    const moveBtn = document.createElement('button');
+    moveBtn.className = 'btn btn-secondary btn-sm';
+    moveBtn.textContent = 'Pindahkan…';
+    moveBtn.addEventListener('click', () => openAlbumPicker(keys, monthLabelOf(mk)));
+    head.appendChild(moveBtn);
+    const grid = document.createElement('div');
+    grid.className = 'photo-grid static';
+    keys.forEach((key) => {
+      const cell = document.createElement('div');
+      cell.className = 'grid-item';
+      const img = document.createElement('img');
+      img.src = photoUrl({ key }, 300);
+      img.alt = '';
+      img.loading = 'lazy';
+      img.addEventListener('click', () => openLightbox(photoUrl({ key })));
+      const mark = document.createElement('span');
+      mark.className = 'face-mark';
+      mark.textContent = `👤${state.faces.get(key).faces}`;
+      cell.append(img, mark);
+      grid.appendChild(cell);
+    });
+    wrap.append(head, grid);
+  });
+}
+
+// Sheet "pindai berapa foto?" — batasi jumlah sesuai pilihan pengguna
+function openScanSheet() {
   if (state.mode !== 'native') {
     toast('Deteksi wajah hanya tersedia di aplikasi Android');
     return;
   }
+  refreshAllIds();
+  const pending = unscannedIds().length;
+  if (!pending) {
+    toast('Semua foto sudah dipindai');
+    return;
+  }
+  $('#scan-sheet-note').textContent =
+    `${pending} foto belum dipindai · yang sudah dipindai otomatis dilewati`;
+  const list = $('#scan-sheet-list');
+  list.innerHTML = '';
+  const options = [100, 300, 1000].filter((n) => n < pending);
+  options.forEach((n) => {
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-secondary';
+    btn.textContent = `${n} foto dulu`;
+    btn.addEventListener('click', () => {
+      $('#scan-sheet').classList.add('hidden');
+      startFaceScan(n);
+    });
+    list.appendChild(btn);
+  });
+  const all = document.createElement('button');
+  all.className = 'btn btn-primary';
+  all.textContent = `Semua (${pending} foto)`;
+  all.addEventListener('click', () => {
+    $('#scan-sheet').classList.add('hidden');
+    startFaceScan(pending);
+  });
+  list.appendChild(all);
+  $('#scan-sheet').classList.remove('hidden');
+}
+
+async function startFaceScan(limit, session) {
   if (state.scanning) return;
-  const ids = unscannedIds();
+  const ids = unscannedIds().slice(0, limit);
   if (!ids.length) {
     toast('Semua foto sudah dipindai');
+    if (session) {
+      session.status = 'done';
+      session.updatedAt = Date.now();
+      await db.putScan(session);
+    }
     renderFaces();
     return;
   }
+  if (!session) {
+    session = {
+      id: uid(),
+      target: ids.length,
+      done: 0,
+      found: 0,
+      status: 'paused',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    state.scans.push(session);
+    await db.putScan(session);
+  }
+  state.scanSession = session;
   state.scanning = true;
-  state.scanTotal = ids.length;
-  state.scanDone = 0;
-  $('#faces-progress-text').textContent = `Memindai… 0 / ${ids.length}`;
-  $('#faces-progress-fill').style.width = '0%';
-  $('#faces-progress-found').textContent = faceKeys().length;
+  state.scanTotal = session.target;
+  state.scanDone = session.done;
+  updateScanProgressUI();
   renderFaces();
   native.scanFaces(JSON.stringify(ids));
+}
+
+function resumeSession(session) {
+  const remaining = session.target - session.done;
+  if (remaining <= 0) {
+    session.status = 'done';
+    db.putScan(session);
+    renderFaces();
+    return;
+  }
+  startFaceScan(remaining, session);
+}
+
+function updateScanProgressUI() {
+  $('#faces-progress-text').textContent = `Memindai… ${state.scanDone} / ${state.scanTotal}`;
+  $('#faces-progress-fill').style.width =
+    `${(state.scanDone / Math.max(1, state.scanTotal)) * 100}%`;
+  $('#faces-progress-found').textContent = state.scanSession ? state.scanSession.found : 0;
+  const meta = $('#smart-faces-meta');
+  if (state.scanning) meta.textContent = `🔍 Memindai… ${state.scanDone} / ${state.scanTotal}`;
 }
 
 window.addEventListener('ng-face-batch', async (e) => {
@@ -587,25 +741,39 @@ window.addEventListener('ng-face-batch', async (e) => {
   records.forEach((r) => state.faces.set(r.key, r));
   await db.putFaces(records);
   state.scanDone += records.length;
-  $('#faces-progress-text').textContent = `Memindai… ${state.scanDone} / ${state.scanTotal}`;
-  $('#faces-progress-fill').style.width = `${(state.scanDone / Math.max(1, state.scanTotal)) * 100}%`;
-  $('#faces-progress-found').textContent = faceKeys().length;
+  const s = state.scanSession;
+  if (s) {
+    s.done += records.length;
+    s.found += records.filter((r) => r.faces > 0).length;
+    s.updatedAt = now;
+    await db.putScan(s);
+  }
+  updateScanProgressUI();
 });
 
-window.addEventListener('ng-face-done', (e) => {
+window.addEventListener('ng-face-done', async (e) => {
   state.scanning = false;
   const cancelled = e.detail && e.detail.cancelled;
-  toast(cancelled ? '⏸ Pemindaian dihentikan' : `✅ Selesai — ${faceKeys().length} foto dengan orang`);
+  const s = state.scanSession;
+  if (s) {
+    s.status = cancelled && s.done < s.target ? 'paused' : 'done';
+    s.updatedAt = Date.now();
+    await db.putScan(s);
+  }
+  state.scanSession = null;
+  toast(cancelled
+    ? '⏸ Dijeda — lanjutkan kapan saja dari daftar sesi'
+    : `✅ Selesai — total ${faceKeys().length} foto dengan orang`);
   renderFaces();
   renderOrganize();
 });
 
-// Sheet pemilih album tujuan, lalu pindahkan SEMUA foto berwajah sekaligus
-async function openAlbumPicker() {
-  const keys = faceKeys();
+// Sheet pemilih album tujuan, lalu pindahkan foto-foto terpilih sekaligus
+async function openAlbumPicker(keys, label) {
   if (!keys.length) return;
   await loadAlbums();
-  $('#album-picker-title').textContent = `Pindahkan ${keys.length} foto ke…`;
+  $('#album-picker-title').textContent =
+    label ? `Pindahkan ${keys.length} foto (${label}) ke…` : `Pindahkan ${keys.length} foto ke…`;
   const list = $('#album-picker-list');
   list.innerHTML = '';
   state.albums.forEach((album) => {
@@ -614,7 +782,7 @@ async function openAlbumPicker() {
     btn.innerHTML = `<span>📁 ${esc(album.name)}</span><span class="cnt">${album.count} foto</span>`;
     btn.addEventListener('click', () => {
       $('#album-picker').classList.add('hidden');
-      moveAllFacesTo(album.name);
+      moveKeysTo(keys, album.name);
     });
     list.appendChild(btn);
   });
@@ -625,17 +793,15 @@ async function openAlbumPicker() {
     const album = await promptNewAlbum();
     if (album) {
       $('#album-picker').classList.add('hidden');
-      moveAllFacesTo(album.name);
+      moveKeysTo(keys, album.name);
     }
   });
   list.appendChild(add);
   $('#album-picker').classList.remove('hidden');
 }
 
-function moveAllFacesTo(albumName) {
-  if (state.committing) return;
-  const keys = faceKeys();
-  if (!keys.length) return;
+function moveKeysTo(keys, albumName) {
+  if (state.committing || !keys.length) return;
   state.committing = true;
   toast(`📁 Memindahkan ${keys.length} foto ke “${albumName}”…`);
   native.commitMoves(JSON.stringify(keys.map((id) => ({ id, album: albumName }))));
@@ -931,12 +1097,15 @@ function bindEvents() {
   $('#btn-apply-moves').addEventListener('click', applyMoves);
 
   $('#smart-faces-card').addEventListener('click', () => showScreen('faces'));
-  $('#btn-scan-faces').addEventListener('click', startFaceScan);
-  $('#btn-rescan').addEventListener('click', startFaceScan);
-  $('#btn-cancel-scan').addEventListener('click', () => native && native.cancelScan());
-  $('#btn-move-all-faces').addEventListener('click', openAlbumPicker);
+  $('#btn-scan-faces').addEventListener('click', openScanSheet);
+  $('#btn-rescan').addEventListener('click', openScanSheet);
+  $('#btn-pause-scan').addEventListener('click', () => native && native.cancelScan());
+  $('#btn-move-all-faces').addEventListener('click', () => openAlbumPicker(faceKeys(), 'semua'));
   $('#album-picker').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) $('#album-picker').classList.add('hidden');
+  });
+  $('#scan-sheet').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) $('#scan-sheet').classList.add('hidden');
   });
 
   $('#btn-close-sort').addEventListener('click', () => showScreen('organize'));
@@ -1011,6 +1180,7 @@ function bindEvents() {
       $('#month-sheet').classList.add('hidden');
       $('#help-overlay').classList.add('hidden');
       $('#album-picker').classList.add('hidden');
+      $('#scan-sheet').classList.add('hidden');
       return;
     }
     if (!$('#screen-sort').classList.contains('active')) return;
@@ -1036,15 +1206,17 @@ function bindEvents() {
 async function init() {
   bindEvents();
   try {
-    const [albums, decisions, faces, photos] = await Promise.all([
+    const [albums, decisions, faces, scans, photos] = await Promise.all([
       db.getAllAlbums(),
       db.getAllDecisions(),
       db.getAllFaces(),
+      db.getAllScans(),
       state.mode === 'web' ? db.getAllPhotos() : Promise.resolve([]),
     ]);
     state.customAlbums = albums.sort((a, b) => a.createdAt - b.createdAt);
     decisions.forEach((d) => state.decisions.set(d.key, d));
     faces.forEach((f) => state.faces.set(f.key, f));
+    state.scans = scans.sort((a, b) => b.createdAt - a.createdAt);
     state.webPhotos = photos.sort((a, b) => (a.takenAt || a.addedAt) - (b.takenAt || b.addedAt));
   } catch (err) {
     console.error('Gagal memuat basis data', err);

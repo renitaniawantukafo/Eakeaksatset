@@ -138,10 +138,10 @@
       <button id="btn-rescan" class="btn btn-secondary btn-sm hidden">Pindai Ulang</button>
     </header>
 
-    <!-- Sebelum pindai -->
+    <!-- Sebelum pindai (belum ada apa pun) -->
     <div id="faces-intro" class="gate hidden">
       <div class="gate-icon">👤</div>
-      <p>Pindai seluruh galeri untuk menemukan foto yang ada orangnya.<br/>
+      <p>Pindai galeri untuk menemukan foto yang ada orangnya.<br/>
         Deteksi berjalan <b>sepenuhnya di HP</b> — tidak ada foto yang dikirim ke mana pun.</p>
       <button id="btn-scan-faces" class="btn btn-primary btn-lg">🔍 Mulai Pindai</button>
       <p id="faces-scan-note" class="smart-meta"></p>
@@ -153,17 +153,34 @@
       <p id="faces-progress-text">Memindai… 0 / 0</p>
       <div class="scan-bar"><div id="faces-progress-fill" class="scan-fill"></div></div>
       <p class="smart-meta"><span id="faces-progress-found">0</span> foto dengan orang ditemukan</p>
-      <button id="btn-cancel-scan" class="btn btn-secondary">Hentikan</button>
+      <button id="btn-pause-scan" class="btn btn-secondary">⏸ Jeda</button>
+      <p class="smart-meta">Hasil yang sudah dipindai tersimpan — bisa dilanjutkan kapan saja.</p>
     </div>
 
-    <!-- Hasil -->
-    <div id="faces-grid" class="photo-grid"></div>
-    <p id="faces-empty-msg" class="muted center hidden">Tidak ditemukan foto dengan wajah orang.</p>
+    <!-- Isi utama: sesi tertunda + hasil per bulan -->
+    <div id="faces-body" class="faces-body hidden">
+      <div id="faces-sessions-wrap" class="hidden">
+        <h3 class="faces-sub">⏸ Sesi tertunda</h3>
+        <div id="faces-sessions" class="faces-sessions"></div>
+      </div>
+      <div id="faces-stats" class="faces-stats"></div>
+      <div id="faces-groups"></div>
+      <p id="faces-empty-msg" class="muted center hidden">Tidak ditemukan foto dengan wajah orang.</p>
+    </div>
 
     <div id="faces-footer" class="faces-footer hidden">
       <button id="btn-move-all-faces" class="btn btn-primary btn-lg">📁 Pindahkan Semua ke Album…</button>
     </div>
   </section>
+
+  <!-- ============ Sheet jumlah pemindaian ============ -->
+  <div id="scan-sheet" class="sheet-backdrop hidden">
+    <div class="sheet">
+      <div class="sheet-title">Pindai berapa foto?</div>
+      <p id="scan-sheet-note" class="muted center" style="padding-top:0"></p>
+      <div id="scan-sheet-list" class="sheet-actions"></div>
+    </div>
+  </div>
 
   <!-- ============ Sheet pemilih album tujuan ============ -->
   <div id="album-picker" class="sheet-backdrop hidden">

@@ -2,10 +2,12 @@
 // photos    : (mode web) { id, name, type, blob, addedAt, takenAt, status: 'inbox'|'kept'|'trash', albumId }
 // albums    : { id, name, createdAt }  — album buatan pengguna (mode web & nama album baru mode native)
 // decisions : (mode native) { key, action: 'keep'|'trash'|'move', album, monthKey, name, takenAt }
-// faces     : cache hasil deteksi wajah { key, faces, scannedAt }
+// faces     : cache hasil deteksi wajah { key, faces, scannedAt } — foto yang sudah
+//             ada di sini TIDAK pernah dipindai ulang
+// scans     : sesi pemindaian { id, target, done, found, status:'paused'|'done', createdAt, updatedAt }
 
 const DB_NAME = 'swipesort';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 let dbPromise = null;
 
@@ -28,6 +30,9 @@ function openDB() {
       }
       if (!db.objectStoreNames.contains('faces')) {
         db.createObjectStore('faces', { keyPath: 'key' });
+      }
+      if (!db.objectStoreNames.contains('scans')) {
+        db.createObjectStore('scans', { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -81,6 +86,10 @@ export const db = {
   putFaces: (records) => tx('faces', 'readwrite', (s) => records.forEach((r) => s.put(r))),
   getAllFaces: () => getAll('faces'),
   clearFaces: () => tx('faces', 'readwrite', (s) => s.clear()),
+
+  putScan: (scan) => tx('scans', 'readwrite', (s) => s.put(scan)),
+  deleteScan: (id) => tx('scans', 'readwrite', (s) => s.delete(id)),
+  getAllScans: () => getAll('scans'),
 };
 
 export function uid() {

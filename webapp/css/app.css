@@ -141,6 +141,42 @@ body {
   transition: width 0.25s ease;
 }
 
+.faces-body { flex: 1; overflow-y: auto; padding-bottom: 12px; }
+.faces-sub { font-size: 15px; font-weight: 800; padding: 4px 16px 8px; color: #d8d8de; }
+.faces-sessions { display: flex; flex-direction: column; gap: 8px; padding: 0 14px 14px; }
+.scan-session {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-elev);
+  border: 1px solid rgba(79, 140, 255, 0.35);
+  border-radius: 16px;
+  padding: 10px 12px;
+}
+.scan-session .info { flex: 1; min-width: 0; }
+.scan-session .line1 { font-size: 14px; font-weight: 700; }
+.scan-session .line2 { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+.scan-session .mini-bar {
+  height: 4px;
+  background: var(--bg-card);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 7px;
+}
+.scan-session .mini-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.faces-stats { padding: 2px 16px 10px; font-size: 12.5px; color: var(--text-dim); }
+.month-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px 6px;
+  font-size: 17px;
+  font-weight: 800;
+}
+.month-head .cnt { color: var(--text-dim); font-size: 13px; font-weight: 600; }
+.month-head .btn { margin-left: auto; }
+.photo-grid.static { overflow: visible; padding-bottom: 8px; }
+
 .faces-footer {
   padding: 10px 16px calc(12px + env(safe-area-inset-bottom));
   background: var(--bg-elev);

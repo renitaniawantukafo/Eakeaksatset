@@ -399,13 +399,28 @@ public class MainActivity extends Activity {
             }
         }
 
-        /** Semua id foto galeri (untuk pemindaian wajah): [id, ...]. */
+        /**
+         * Semua foto galeri dengan tanggalnya, terbaru dulu (untuk pemindaian
+         * wajah & pengelompokan hasil per bulan): [{id, taken}, ...].
+         */
         @JavascriptInterface
         public String listAllIds() {
             JSONArray out = new JSONArray();
-            try (Cursor c = queryImages(new String[]{MediaStore.Images.Media._ID}, null, null)) {
+            try (Cursor c = queryImages(new String[]{
+                    MediaStore.Images.Media._ID,
+                    MediaStore.Images.Media.DATE_TAKEN,
+                    MediaStore.Images.Media.DATE_ADDED}, null,
+                    MediaStore.Images.Media.DATE_ADDED + " DESC")) {
                 if (c != null) {
-                    while (c.moveToNext()) out.put(c.getLong(0));
+                    while (c.moveToNext()) {
+                        try {
+                            JSONObject o = new JSONObject();
+                            o.put("id", c.getLong(0));
+                            o.put("taken", bestDate(c.getLong(1), c.getLong(2)));
+                            out.put(o);
+                        } catch (Exception ignored) {
+                        }
+                    }
                 }
             }
             return out.toString();
