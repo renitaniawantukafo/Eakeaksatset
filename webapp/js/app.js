@@ -26,6 +26,10 @@ const state = {
   undoStack: [], // {photoKey, prev:decision|null, cursor}
   currentAlbumName: null,
   committing: false,
+  faces: new Map(), // photoKey -> {key, faces, scannedAt}
+  scanning: false,
+  scanTotal: 0,
+  scanDone: 0,
 };
 
 const urlCache = new Map();
@@ -190,6 +194,7 @@ function showScreen(name) {
   if (name === 'organize') renderOrganize();
   if (name === 'trash') renderTrash();
   if (name === 'albums') renderAlbumList();
+  if (name === 'faces') renderFaces();
 }
 
 // ---------- Layar Susun ----------
@@ -204,6 +209,16 @@ async function renderOrganize() {
   const moves = pendingMoves();
   $('#pending-banner').classList.toggle('hidden', !isNative || moves.length === 0);
   $('#pending-text').textContent = `📁 ${moves.length} foto menunggu dipindahkan`;
+
+  // Kartu filter pintar (hanya mode Android dengan izin)
+  $('#smart-section').classList.toggle('hidden', !isNative || !state.permission);
+  if (isNative && state.permission) {
+    const found = faceKeys().length;
+    const scanned = state.faces.size;
+    $('#smart-faces-meta').textContent = scanned === 0
+      ? 'Ketuk untuk memindai wajah di seluruh galeri'
+      : `${found} foto dengan orang · ${scanned} foto dipindai`;
+  }
 
   const list = $('#month-list');
   list.innerHTML = '';
@@ -476,7 +491,8 @@ window.addEventListener('ng-moves-done', async (e) => {
   await db.deleteDecisions(moved.map(String));
   moved.forEach((id) => state.decisions.delete(String(id)));
   toast(failed ? `📁 ${moved.length} dipindahkan, ${failed} gagal` : `📁 ${moved.length} foto dipindahkan`);
-  renderOrganize();
+  if ($('#screen-faces').classList.contains('active')) renderFaces();
+  else renderOrganize();
 });
 
 window.addEventListener('ng-deletes-done', async (e) => {
@@ -498,6 +514,132 @@ window.addEventListener('ng-permission', (e) => {
   if (!state.permission) toast('Izin galeri ditolak');
   renderOrganize();
 });
+
+// ---------- Deteksi wajah ----------
+const faceKeys = () => [...state.faces.values()].filter((f) => f.faces > 0).map((f) => f.key);
+
+function unscannedIds() {
+  const all = JSON.parse(native.listAllIds());
+  return all.map(String).filter((id) => !state.faces.has(id));
+}
+
+function renderFaces() {
+  const found = faceKeys();
+  const scanned = state.faces.size;
+  const pending = state.mode === 'native' && state.permission ? unscannedIds().length : 0;
+
+  $('#faces-count').textContent = found.length;
+  $('#faces-intro').classList.toggle('hidden', state.scanning || scanned > 0);
+  $('#faces-progress').classList.toggle('hidden', !state.scanning);
+  $('#faces-empty-msg').classList.toggle('hidden', state.scanning || scanned === 0 || found.length > 0);
+  $('#faces-footer').classList.toggle('hidden', state.scanning || found.length === 0);
+  $('#btn-rescan').classList.toggle('hidden', state.scanning || scanned === 0);
+  $('#btn-rescan').textContent = pending > 0 ? `Pindai ${pending} foto baru` : 'Semua sudah dipindai';
+  $('#btn-rescan').disabled = pending === 0;
+  $('#faces-scan-note').textContent = pending > 0 ? `${pending} foto akan dipindai` : '';
+
+  const grid = $('#faces-grid');
+  grid.innerHTML = '';
+  if (state.scanning) return;
+  // Terbaru dulu supaya grid terasa hidup
+  [...found].reverse().forEach((key) => {
+    const cell = document.createElement('div');
+    cell.className = 'grid-item';
+    const img = document.createElement('img');
+    img.src = photoUrl({ key }, 300);
+    img.alt = '';
+    img.loading = 'lazy';
+    img.addEventListener('click', () => openLightbox(photoUrl({ key })));
+    const mark = document.createElement('span');
+    mark.className = 'face-mark';
+    mark.textContent = `👤${state.faces.get(key).faces}`;
+    cell.append(img, mark);
+    grid.appendChild(cell);
+  });
+}
+
+function startFaceScan() {
+  if (state.mode !== 'native') {
+    toast('Deteksi wajah hanya tersedia di aplikasi Android');
+    return;
+  }
+  if (state.scanning) return;
+  const ids = unscannedIds();
+  if (!ids.length) {
+    toast('Semua foto sudah dipindai');
+    renderFaces();
+    return;
+  }
+  state.scanning = true;
+  state.scanTotal = ids.length;
+  state.scanDone = 0;
+  $('#faces-progress-text').textContent = `Memindai… 0 / ${ids.length}`;
+  $('#faces-progress-fill').style.width = '0%';
+  $('#faces-progress-found').textContent = faceKeys().length;
+  renderFaces();
+  native.scanFaces(JSON.stringify(ids));
+}
+
+window.addEventListener('ng-face-batch', async (e) => {
+  const results = (e.detail && e.detail.results) || [];
+  const now = Date.now();
+  const records = results.map((r) => ({ key: String(r.id), faces: r.faces, scannedAt: now }));
+  records.forEach((r) => state.faces.set(r.key, r));
+  await db.putFaces(records);
+  state.scanDone += records.length;
+  $('#faces-progress-text').textContent = `Memindai… ${state.scanDone} / ${state.scanTotal}`;
+  $('#faces-progress-fill').style.width = `${(state.scanDone / Math.max(1, state.scanTotal)) * 100}%`;
+  $('#faces-progress-found').textContent = faceKeys().length;
+});
+
+window.addEventListener('ng-face-done', (e) => {
+  state.scanning = false;
+  const cancelled = e.detail && e.detail.cancelled;
+  toast(cancelled ? '⏸ Pemindaian dihentikan' : `✅ Selesai — ${faceKeys().length} foto dengan orang`);
+  renderFaces();
+  renderOrganize();
+});
+
+// Sheet pemilih album tujuan, lalu pindahkan SEMUA foto berwajah sekaligus
+async function openAlbumPicker() {
+  const keys = faceKeys();
+  if (!keys.length) return;
+  await loadAlbums();
+  $('#album-picker-title').textContent = `Pindahkan ${keys.length} foto ke…`;
+  const list = $('#album-picker-list');
+  list.innerHTML = '';
+  state.albums.forEach((album) => {
+    const btn = document.createElement('button');
+    btn.className = 'sheet-album';
+    btn.innerHTML = `<span>📁 ${esc(album.name)}</span><span class="cnt">${album.count} foto</span>`;
+    btn.addEventListener('click', () => {
+      $('#album-picker').classList.add('hidden');
+      moveAllFacesTo(album.name);
+    });
+    list.appendChild(btn);
+  });
+  const add = document.createElement('button');
+  add.className = 'sheet-album';
+  add.innerHTML = '<span>＋ Album baru…</span>';
+  add.addEventListener('click', async () => {
+    const album = await promptNewAlbum();
+    if (album) {
+      $('#album-picker').classList.add('hidden');
+      moveAllFacesTo(album.name);
+    }
+  });
+  list.appendChild(add);
+  $('#album-picker').classList.remove('hidden');
+}
+
+function moveAllFacesTo(albumName) {
+  if (state.committing) return;
+  const keys = faceKeys();
+  if (!keys.length) return;
+  state.committing = true;
+  toast(`📁 Memindahkan ${keys.length} foto ke “${albumName}”…`);
+  native.commitMoves(JSON.stringify(keys.map((id) => ({ id, album: albumName }))));
+}
 
 // ---------- Kartu & gesture ----------
 function renderCardStack() {
@@ -788,6 +930,15 @@ function bindEvents() {
   $('#btn-grant').addEventListener('click', () => native && native.requestPermission());
   $('#btn-apply-moves').addEventListener('click', applyMoves);
 
+  $('#smart-faces-card').addEventListener('click', () => showScreen('faces'));
+  $('#btn-scan-faces').addEventListener('click', startFaceScan);
+  $('#btn-rescan').addEventListener('click', startFaceScan);
+  $('#btn-cancel-scan').addEventListener('click', () => native && native.cancelScan());
+  $('#btn-move-all-faces').addEventListener('click', openAlbumPicker);
+  $('#album-picker').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) $('#album-picker').classList.add('hidden');
+  });
+
   $('#btn-close-sort').addEventListener('click', () => showScreen('organize'));
   $('#btn-month-pill').addEventListener('click', openMonthSheet);
   $('#btn-open-trash').addEventListener('click', () => showScreen('trash'));
@@ -859,6 +1010,7 @@ function bindEvents() {
       closeLightbox();
       $('#month-sheet').classList.add('hidden');
       $('#help-overlay').classList.add('hidden');
+      $('#album-picker').classList.add('hidden');
       return;
     }
     if (!$('#screen-sort').classList.contains('active')) return;
@@ -884,13 +1036,15 @@ function bindEvents() {
 async function init() {
   bindEvents();
   try {
-    const [albums, decisions, photos] = await Promise.all([
+    const [albums, decisions, faces, photos] = await Promise.all([
       db.getAllAlbums(),
       db.getAllDecisions(),
+      db.getAllFaces(),
       state.mode === 'web' ? db.getAllPhotos() : Promise.resolve([]),
     ]);
     state.customAlbums = albums.sort((a, b) => a.createdAt - b.createdAt);
     decisions.forEach((d) => state.decisions.set(d.key, d));
+    faces.forEach((f) => state.faces.set(f.key, f));
     state.webPhotos = photos.sort((a, b) => (a.takenAt || a.addedAt) - (b.takenAt || b.addedAt));
   } catch (err) {
     console.error('Gagal memuat basis data', err);

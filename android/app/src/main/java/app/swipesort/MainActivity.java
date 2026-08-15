@@ -84,6 +84,7 @@ public class MainActivity extends Activity {
 
     private WebView webView;
     private ValueCallback<Uri[]> pendingFileCallback;
+    private volatile boolean scanCancelled;
     // Perpindahan yang menunggu persetujuan dialog createWriteRequest
     private List<long[]> pendingMoveIds; // hanya id, album paralel di pendingMoveAlbums
     private List<String> pendingMoveAlbums;
@@ -398,6 +399,61 @@ public class MainActivity extends Activity {
             }
         }
 
+        /** Semua id foto galeri (untuk pemindaian wajah): [id, ...]. */
+        @JavascriptInterface
+        public String listAllIds() {
+            JSONArray out = new JSONArray();
+            try (Cursor c = queryImages(new String[]{MediaStore.Images.Media._ID}, null, null)) {
+                if (c != null) {
+                    while (c.moveToNext()) out.put(c.getLong(0));
+                }
+            }
+            return out.toString();
+        }
+
+        /**
+         * Pindai wajah untuk id yang diberikan, di thread latar.
+         * Hasil dikirim bertahap lewat event ng-face-batch {results:[{id,faces}]},
+         * lalu ng-face-done {cancelled} saat selesai/dihentikan.
+         */
+        @JavascriptInterface
+        public void scanFaces(String idsJson) {
+            final List<Long> ids = new ArrayList<>();
+            try {
+                JSONArray arr = new JSONArray(idsJson);
+                for (int i = 0; i < arr.length(); i++) ids.add(Long.parseLong(arr.getString(i)));
+            } catch (Exception e) {
+                emitFaceDone(false);
+                return;
+            }
+            scanCancelled = false;
+            new Thread(() -> {
+                JSONArray batch = new JSONArray();
+                try {
+                    for (Long id : ids) {
+                        if (scanCancelled) break;
+                        int faces = countFaces(id);
+                        JSONObject o = new JSONObject();
+                        o.put("id", id);
+                        o.put("faces", faces);
+                        batch.put(o);
+                        if (batch.length() >= 8) {
+                            emitFaceBatch(batch);
+                            batch = new JSONArray();
+                        }
+                    }
+                    if (batch.length() > 0) emitFaceBatch(batch);
+                } catch (Exception ignored) {
+                }
+                emitFaceDone(scanCancelled);
+            }, "face-scan").start();
+        }
+
+        @JavascriptInterface
+        public void cancelScan() {
+            scanCancelled = true;
+        }
+
         @JavascriptInterface
         public void share(String id) {
             try {
@@ -500,6 +556,59 @@ public class MainActivity extends Activity {
         }
         return new File(Environment.getExternalStoragePublicDirectory(
                 Environment.DIRECTORY_PICTURES), album);
+    }
+
+    // ================== Deteksi wajah ==================
+
+    /**
+     * Hitung wajah pada satu foto memakai android.media.FaceDetector bawaan
+     * (offline, tanpa dependensi). Butuh bitmap RGB_565 dengan lebar genap.
+     */
+    private int countFaces(long id) {
+        Bitmap thumb = null;
+        Bitmap rgb565 = null;
+        try {
+            Uri uri = imageUri(id);
+            if (Build.VERSION.SDK_INT >= 29) {
+                thumb = getContentResolver().loadThumbnail(uri, new Size(512, 512), null);
+            } else {
+                thumb = MediaStore.Images.Thumbnails.getThumbnail(
+                        getContentResolver(), id, MediaStore.Images.Thumbnails.MINI_KIND, null);
+            }
+            if (thumb == null) return 0;
+            int w = thumb.getWidth() & ~1; // lebar wajib genap untuk FaceDetector
+            int h = thumb.getHeight();
+            if (w < 32 || h < 32) return 0;
+            rgb565 = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565);
+            android.graphics.Canvas canvas = new android.graphics.Canvas(rgb565);
+            canvas.drawBitmap(thumb, 0, 0, null);
+            android.media.FaceDetector detector = new android.media.FaceDetector(w, h, 5);
+            android.media.FaceDetector.Face[] faces = new android.media.FaceDetector.Face[5];
+            return detector.findFaces(rgb565, faces);
+        } catch (Exception e) {
+            return 0;
+        } finally {
+            if (rgb565 != null) rgb565.recycle();
+            if (thumb != null) thumb.recycle();
+        }
+    }
+
+    private void emitFaceBatch(JSONArray results) {
+        try {
+            JSONObject detail = new JSONObject();
+            detail.put("results", results);
+            emitEvent("ng-face-batch", detail);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void emitFaceDone(boolean cancelled) {
+        try {
+            JSONObject detail = new JSONObject();
+            detail.put("cancelled", cancelled);
+            emitEvent("ng-face-done", detail);
+        } catch (Exception ignored) {
+        }
     }
 
     // ================== Event ke JavaScript ==================

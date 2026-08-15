@@ -15,6 +15,9 @@ Aplikasi web (PWA) untuk merapikan galeri foto dengan gesture swipe, terinspiras
   sungguhan diterapkan sekaligus lewat **dialog konfirmasi sistem Android**
   (sesuai aturan scoped storage Android 11+).
 - **↩️ Undo**, ringkasan per bulan, indikator progres `1 / 1018 · tanggal`.
+- **👤 Filter wajah** — pindai seluruh galeri dengan deteksi wajah on-device
+  (`android.media.FaceDetector`, offline & privat), lihat semua foto yang ada
+  orangnya, lalu **pindahkan semuanya ke satu album** dengan sekali ketuk.
 - **🌐 Mode web** — di browser (tanpa Android), foto diimpor manual dan tetap
   dikelompokkan per bulan dari tanggal berkas; data tersimpan di IndexedDB.
 

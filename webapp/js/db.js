@@ -2,9 +2,10 @@
 // photos    : (mode web) { id, name, type, blob, addedAt, takenAt, status: 'inbox'|'kept'|'trash', albumId }
 // albums    : { id, name, createdAt }  — album buatan pengguna (mode web & nama album baru mode native)
 // decisions : (mode native) { key, action: 'keep'|'trash'|'move', album, monthKey, name, takenAt }
+// faces     : cache hasil deteksi wajah { key, faces, scannedAt }
 
 const DB_NAME = 'swipesort';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise = null;
 
@@ -24,6 +25,9 @@ function openDB() {
       }
       if (!db.objectStoreNames.contains('decisions')) {
         db.createObjectStore('decisions', { keyPath: 'key' });
+      }
+      if (!db.objectStoreNames.contains('faces')) {
+        db.createObjectStore('faces', { keyPath: 'key' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -73,6 +77,10 @@ export const db = {
   deleteDecision: (key) => tx('decisions', 'readwrite', (s) => s.delete(key)),
   deleteDecisions: (keys) => tx('decisions', 'readwrite', (s) => keys.forEach((k) => s.delete(k))),
   getAllDecisions: () => getAll('decisions'),
+
+  putFaces: (records) => tx('faces', 'readwrite', (s) => records.forEach((r) => s.put(r))),
+  getAllFaces: () => getAll('faces'),
+  clearFaces: () => tx('faces', 'readwrite', (s) => s.clear()),
 };
 
 export function uid() {
