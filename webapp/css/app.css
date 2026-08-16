@@ -148,7 +148,8 @@ body {
 
 /* Mode seleksi massal */
 #screen-faces .photo-grid { grid-template-columns: repeat(var(--grid-cols, 3), 1fr); }
-.faces-body.selecting .grid-item { touch-action: none; }
+/* pan-y: geser vertikal tetap scroll native; seret horizontal jadi drag-select */
+.faces-body .grid-item { touch-action: pan-y; }
 .grid-item.selectable { cursor: pointer; }
 .grid-item.selected { outline: 3px solid var(--accent); outline-offset: -3px; }
 .grid-item.selected img { opacity: 0.55; transform: scale(0.94); transition: transform 0.1s ease; }

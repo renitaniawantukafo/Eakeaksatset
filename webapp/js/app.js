@@ -896,22 +896,64 @@ function openTagPicker(keys) {
   $('#tag-picker').classList.remove('hidden');
 }
 
-// Seret jari melintasi grid untuk memilih banyak foto sekaligus
+// Seret jari melintasi grid untuk memilih banyak foto sekaligus.
+// Model gesture (agar scroll tetap enak saat mode seleksi):
+//  - geser VERTIKAL  → scroll native biasa (touch-action: pan-y)
+//  - KETUK           → pilih/batal satu foto
+//  - seret mulai MENYAMPING → drag-select; setelah aktif bebas ke segala
+//    arah, dengan gulir otomatis di tepi atas/bawah
+//  - TAHAN foto (long-press) saat belum mode seleksi → masuk mode pilih
 function bindDragSelect() {
   const body = $('#faces-body');
+  let start = null; // {x, y, key, longFired}
+  let longTimer = null;
+
+  const clearGesture = () => {
+    clearTimeout(longTimer);
+    longTimer = null;
+    start = null;
+    state.sel.dragging = false;
+  };
 
   body.addEventListener('pointerdown', (e) => {
-    if (!state.sel.active) return;
     const cell = e.target.closest('.grid-item[data-key]');
     if (!cell) return;
-    state.sel.dragging = true;
-    // Sel awal menentukan mode: mulai dari sel terpilih = mode hapus-pilih
-    state.sel.dragMode = state.sel.keys.has(cell.dataset.key) ? 'remove' : 'add';
-    setSelect(cell.dataset.key, state.sel.dragMode === 'add');
+    start = { x: e.clientX, y: e.clientY, key: cell.dataset.key, longFired: false };
+    state.sel.dragging = false;
+    clearTimeout(longTimer);
+    longTimer = setTimeout(() => {
+      if (!start) return;
+      start.longFired = true;
+      if (!state.sel.active) setSelectionMode(true);
+      setSelect(start.key, true);
+      if (navigator.vibrate) navigator.vibrate(15);
+    }, 400);
   });
 
   body.addEventListener('pointermove', (e) => {
-    if (!state.sel.active || !state.sel.dragging) return;
+    if (!start) return;
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
+    if (Math.abs(dx) > 8 || Math.abs(dy) > 8) clearTimeout(longTimer);
+    if (!state.sel.active) return;
+
+    if (!state.sel.dragging) {
+      // Mulai drag-select hanya dari gerakan menyamping; gerakan vertikal
+      // dibiarkan menjadi scroll native
+      if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) {
+        state.sel.dragging = true;
+        state.sel.dragMode =
+          state.sel.keys.has(start.key) && !start.longFired ? 'remove' : 'add';
+        setSelect(start.key, state.sel.dragMode === 'add');
+        try {
+          body.setPointerCapture(e.pointerId);
+        } catch (err) {
+          /* abaikan */
+        }
+      }
+      return;
+    }
+
     const el = document.elementFromPoint(e.clientX, e.clientY);
     const cell = el && el.closest ? el.closest('.grid-item[data-key]') : null;
     if (cell) setSelect(cell.dataset.key, state.sel.dragMode === 'add');
@@ -921,11 +963,17 @@ function bindDragSelect() {
     else if (e.clientY > rect.bottom - 90) body.scrollBy(0, 14);
   });
 
-  const endDrag = () => {
-    state.sel.dragging = false;
-  };
-  body.addEventListener('pointerup', endDrag);
-  body.addEventListener('pointercancel', endDrag);
+  body.addEventListener('pointerup', (e) => {
+    if (start && state.sel.active && !state.sel.dragging && !start.longFired) {
+      // Ketukan biasa (nyaris tanpa gerakan) = toggle satu foto
+      const dx = e.clientX - start.x;
+      const dy = e.clientY - start.y;
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) toggleSelect(start.key);
+    }
+    clearGesture();
+  });
+  // Scroll native mengambil alih gesture → bersihkan tanpa efek samping
+  body.addEventListener('pointercancel', clearGesture);
 }
 
 // ---------- Pinch zoom grid (2-6 kolom) ----------
